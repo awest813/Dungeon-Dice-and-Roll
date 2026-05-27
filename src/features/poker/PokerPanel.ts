@@ -9,7 +9,7 @@ import {
     PokerGameState, PokerPlayer, PlayerAction,
     createGame, dealHand, processAction,
     activeSeatId, callAmount,
-    cardLabel, isRed,
+    isRed, rankLabel,
     Card, evalBestHand,
 } from './PokerEngine';
 import {
@@ -68,22 +68,32 @@ function makeCardObj(
     cy: number,
 ): Phaser.GameObjects.Container {
     const W = 32, H = 44;
-    const bg = scene.add.rectangle(cx, cy, W, H,
-        faceDown ? 0x1a3a5a : (card && isRed(card) ? 0xfff0f0 : 0xfafafa), 1)
-        .setStrokeStyle(1, faceDown ? 0x3a6a9a : 0x888888, 1);
 
     if (faceDown || !card) {
-        const back = scene.add.text(cx, cy, '?', {
-            fontFamily: 'monospace', fontSize: '16px', color: '#3a6a9a',
-        }).setOrigin(0.5);
-        return scene.add.container(0, 0, [bg, back]);
+        const backImg = scene.add.image(cx, cy, 'card_back');
+        backImg.setDisplaySize(W, H);
+        return scene.add.container(0, 0, [backImg]);
     }
 
-    const color = isRed(card) ? '#cc2222' : '#111111';
-    const lbl = scene.add.text(cx, cy, cardLabel(card), {
-        fontFamily: 'monospace', fontSize: '12px', color, fontStyle: 'bold',
-    }).setOrigin(0.5);
-    return scene.add.container(0, 0, [bg, lbl]);
+    const bg = scene.add.rectangle(cx, cy, W, H,
+        card && isRed(card) ? 0xfff0f0 : 0xfafafa, 1)
+        .setStrokeStyle(1, 0x888888, 1);
+
+    const color = isRed(card) ? '#cc2222' : '#111118';
+    const suitKey = `suit_${card.suit}`;
+    const suitImg = scene.add.image(cx, cy + 4, suitKey);
+    suitImg.setDisplaySize(15, 15);
+
+    const rLabel = rankLabel(card.rank);
+    const rankText = scene.add.text(cx - W / 2 + 3, cy - H / 2 + 2, rLabel, {
+        fontFamily: 'monospace', fontSize: '9px', color, fontStyle: 'bold',
+    }).setOrigin(0, 0);
+
+    const rankTextBottom = scene.add.text(cx + W / 2 - 3, cy + H / 2 - 2, rLabel, {
+        fontFamily: 'monospace', fontSize: '9px', color, fontStyle: 'bold',
+    }).setOrigin(1, 1);
+
+    return scene.add.container(0, 0, [bg, suitImg, rankText, rankTextBottom]);
 }
 
 // ── Panel class ───────────────────────────────────────────────────────────────
@@ -515,14 +525,8 @@ export class PokerPanel {
         ) {
             const [c1, c2] = gamePlayer.holeCards;
             botLabel.setText('');
-            const h1 = this.scene.add.text(-18, 14, cardLabel(c1), {
-                fontFamily: 'monospace', fontSize: '10px',
-                color: isRed(c1) ? '#e05050' : '#e0e0e0',
-            }).setOrigin(0.5);
-            const h2 = this.scene.add.text(18, 14, cardLabel(c2), {
-                fontFamily: 'monospace', fontSize: '10px',
-                color: isRed(c2) ? '#e05050' : '#e0e0e0',
-            }).setOrigin(0.5);
+            const h1 = makeCardObj(this.scene, c1, false, -18, 14);
+            const h2 = makeCardObj(this.scene, c2, false, 18, 14);
             btn.add([h1, h2]);
         }
 

@@ -14,9 +14,10 @@ import {
     BlackjackState, BJResult,
     createGame, deal, hit, stand, doubleDown, nextHand,
     split, canSplit, takeInsurance, declineInsurance, isSoftHand,
-    handValue, isBlackjack, cardLabel, isRed, chipDelta,
+    handValue, isBlackjack, isRed, chipDelta,
     Card,
 } from './BlackjackEngine';
+import { rankLabel } from '../poker/PokerEngine';
 import { ToastManager } from '../ui/ToastManager';
 
 // ── Layout constants ──────────────────────────────────────────────────────────
@@ -784,22 +785,14 @@ export class BlackjackPanel {
         shadow.fillRoundedRect(x - w / 2 + 2, y - h / 2 + 3, w, h, 3);
         this.container.add(shadow);
 
-        const bg = this.scene.add.graphics();
         if (hidden) {
-            bg.fillStyle(0x1a2050, 1);
-            bg.fillRoundedRect(x - w / 2, y - h / 2, w, h, 3);
-            bg.lineStyle(1.5, 0x4060c0, 0.8);
-            bg.strokeRoundedRect(x - w / 2, y - h / 2, w, h, 3);
-            bg.lineStyle(1, 0x304080, 0.5);
-            bg.strokeRoundedRect(x - w / 2 + 3, y - h / 2 + 3, w - 6, h - 6, 2);
-            const pat = this.scene.add.text(x, y, '?', {
-                fontFamily: FONT, fontSize: '22px', color: '#3050c0',
-            }).setOrigin(0.5);
-            this.container.add(bg);
-            this.container.add(pat);
-            return [shadow, bg, pat];
+            const backImg = this.scene.add.image(x, y, 'card_back');
+            backImg.setDisplaySize(w, h);
+            this.container.add(backImg);
+            return [shadow, backImg];
         }
 
+        const bg = this.scene.add.graphics();
         const red = isRed(card);
         bg.fillStyle(red ? 0xfff0f0 : 0xf8f8f8, 1);
         bg.fillRoundedRect(x - w / 2, y - h / 2, w, h, 3);
@@ -807,14 +800,16 @@ export class BlackjackPanel {
         bg.strokeRoundedRect(x - w / 2, y - h / 2, w, h, 3);
 
         const col = red ? '#c82020' : '#111118';
-        const lbl = cardLabel(card);
+        const lbl = rankLabel(card.rank);
 
         const topLeft = this.scene.add.text(x - w / 2 + 3, y - h / 2 + 2, lbl, {
             fontFamily: FONT, fontSize: '9px', color: col, fontStyle: 'bold',
         }).setOrigin(0, 0);
-        const centerSuit = this.scene.add.text(x, y, lbl.slice(-1), {
-            fontFamily: FONT, fontSize: '24px', color: col,
-        }).setOrigin(0.5);
+        
+        const suitKey = `suit_${card.suit}`;
+        const centerSuit = this.scene.add.image(x, y + 4, suitKey);
+        centerSuit.setDisplaySize(18, 18);
+        
         const bottomRight = this.scene.add.text(x + w / 2 - 3, y + h / 2 - 2, lbl, {
             fontFamily: FONT, fontSize: '9px', color: col, fontStyle: 'bold',
         }).setOrigin(1, 1);

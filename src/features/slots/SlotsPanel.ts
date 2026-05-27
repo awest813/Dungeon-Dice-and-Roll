@@ -21,6 +21,17 @@ const PAYOUTS: Record<string, number> = {
 };
 const CHERRY_PAIR_PAYOUT = 1;   // Two cherries = small consolation
 
+const SYMBOL_KEYS: Record<string, string> = {
+    '🍒': 'slots_cherry',
+    '🍋': 'slots_lemon',
+    '🍊': 'slots_orange',
+    '🍇': 'slots_grape',
+    '⭐': 'slots_star',
+    '💎': 'slots_diamond',
+    '7️⃣': 'slots_seven',
+    '🎰': 'slots_wild'
+};
+
 function weightedRandom(): string {
     const total = WEIGHTS.reduce((a, b) => a + b, 0);
     let r = Math.random() * total;
@@ -54,8 +65,8 @@ export class SlotsPanel {
     private reelOuters:  Phaser.GameObjects.Container[] = [];
     /** Inner scrolling strip — its .y is animated during a spin. */
     private reelStrips:  Phaser.GameObjects.Container[] = [];
-    /** Text objects inside each strip, STRIP_LENGTH per reel. */
-    private reelStripSymbols: Phaser.GameObjects.Text[][] = [];
+    /** Image objects inside each strip, STRIP_LENGTH per reel. */
+    private reelStripSymbols: Phaser.GameObjects.Image[][] = [];
     /** Geometry-mask graphics pinned to the slot window (scrollFactor=0). */
     private reelMaskGfxs: Phaser.GameObjects.Graphics[] = [];
     /** Active spin tweens for early-cancel if panel closes. */
@@ -344,9 +355,32 @@ export class SlotsPanel {
         for (let i = 0; i < 3; i++) {
             // ── Slot background graphics (stays fixed, drawn on main container) ──
             const rgfx = this.scene.add.graphics();
-            // Slot bg
-            rgfx.fillStyle(0x07071a, 1);
-            rgfx.fillRoundedRect(reelXs[i] - rSlotW / 2, reelPanelY - rSlotH / 2, rSlotW, rSlotH, 5);
+            
+            // Curved metallic slot reel cylinder shading
+            const startY = reelPanelY - rSlotH / 2;
+            rgfx.fillStyle(0x04040a, 1);
+            rgfx.fillRoundedRect(reelXs[i] - rSlotW / 2, startY, rSlotW, rSlotH, 5);
+            
+            // Draw horizontal shading lines to simulate physical cylinder curvature
+            for (let sy = 0; sy < rSlotH; sy++) {
+                const normalizedY = sy / rSlotH; // 0 to 1
+                const distFromCenter = Math.abs(normalizedY - 0.5) * 2; // 0 at center, 1 at edges
+                
+                // Top/bottom edge shadows (simulates depth shading on a curved surface)
+                const shadeAlpha = Math.pow(distFromCenter, 2.2) * 0.58;
+                rgfx.fillStyle(0x000000, shadeAlpha);
+                rgfx.fillRect(reelXs[i] - rSlotW / 2, startY + sy, rSlotW, 1);
+                
+                // Specular light glare highlight in the middle
+                if (sy >= rSlotH * 0.42 && sy <= rSlotH * 0.49) {
+                    const glareAlpha = (1 - Math.abs(normalizedY - 0.455) * 22) * 0.12;
+                    if (glareAlpha > 0) {
+                        rgfx.fillStyle(0xffffff, glareAlpha);
+                        rgfx.fillRect(reelXs[i] - rSlotW / 2, startY + sy, rSlotW, 1);
+                    }
+                }
+            }
+            
             // Slot border
             rgfx.lineStyle(1, COL_SLOT_TRIM, 0.4);
             rgfx.strokeRoundedRect(reelXs[i] - rSlotW / 2, reelPanelY - rSlotH / 2, rSlotW, rSlotH, 5);
@@ -369,11 +403,13 @@ export class SlotsPanel {
             reelOuter.add(reelStrip);
             this.reelStrips.push(reelStrip);
 
-            const stripSymbols: Phaser.GameObjects.Text[] = [];
+            const stripSymbols: Phaser.GameObjects.Image[] = [];
             for (let j = 0; j < STRIP_LENGTH; j++) {
-                const sym = this.scene.add.text(0, -j * SYMBOL_H, SYMBOLS[j % SYMBOLS.length], {
-                    fontFamily: FONT, fontSize: '44px',
-                }).setOrigin(0.5);
+                const symString = j === STRIP_LENGTH - 1 ? '🎰' : SYMBOLS[j % SYMBOLS.length];
+                const key = SYMBOL_KEYS[symString] || 'slots_wild';
+                const sym = this.scene.add.image(0, -j * SYMBOL_H, key)
+                    .setOrigin(0.5);
+                sym.setDisplaySize(76, 76);
                 reelStrip.add(sym);
                 stripSymbols.push(sym);
             }
@@ -407,6 +443,11 @@ export class SlotsPanel {
                 rSlotW, rSlotH / 2 - 24);
             this.container.add(bandGfx);
         }
+
+        // Premium Cabinet Bezel Frame overlay
+        const bezelImg = this.scene.add.image(0, reelPanelY, 'slots_bezel');
+        bezelImg.setDisplaySize(reelW + 16, reelH + 16);
+        this.container.add(bezelImg);
 
         // Pay-line
         this.payLineGfx = this.scene.add.graphics();
@@ -722,9 +763,12 @@ export class SlotsPanel {
             // Populate strip: random symbols for 0..N-2, final symbol at N-1
             const symbols = this.reelStripSymbols[i];
             for (let j = 0; j < STRIP_LENGTH - 1; j++) {
-                symbols[j].setText(SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)]);
+                const randSym = SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)];
+                symbols[j].setTexture(SYMBOL_KEYS[randSym]);
+                symbols[j].setDisplaySize(76, 76);
             }
-            symbols[STRIP_LENGTH - 1].setText(finalSymbols[i]);
+            symbols[STRIP_LENGTH - 1].setTexture(SYMBOL_KEYS[finalSymbols[i]]);
+            symbols[STRIP_LENGTH - 1].setDisplaySize(76, 76);
 
             // Reset strip to top (symbol[0] visible at centre of window)
             this.reelStrips[i].setY(0);

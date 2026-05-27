@@ -288,6 +288,30 @@ export class PreloadScene extends Phaser.Scene {
             }).setOrigin(0.5, 0);
         });
 
+        // ── Load Premium Visual Assets ──────────────────────────────────────
+        this.load.image('slots_cherry', 'assets/slots/cherry.png');
+        this.load.image('slots_lemon', 'assets/slots/lemon.png');
+        this.load.image('slots_orange', 'assets/slots/orange.png');
+        this.load.image('slots_grape', 'assets/slots/grape.png');
+        this.load.image('slots_star', 'assets/slots/star.png');
+        this.load.image('slots_diamond', 'assets/slots/diamond.png');
+        this.load.image('slots_seven', 'assets/slots/seven.png');
+        this.load.image('slots_wild', 'assets/slots/wild.png');
+        this.load.image('slots_bezel', 'assets/slots/slots_bezel.png');
+        this.load.image('card_back', 'assets/cards/card_back.png');
+
+        // Card Suits
+        this.load.image('suit_S', 'assets/cards/spades.png');
+        this.load.image('suit_H', 'assets/cards/hearts.png');
+        this.load.image('suit_C', 'assets/cards/clubs.png');
+        this.load.image('suit_D', 'assets/cards/diamonds.png');
+
+        // Avatars
+        this.load.image('avatar_player', 'assets/avatars/avatar_player.png');
+        this.load.image('avatar_ai_male', 'assets/avatars/avatar_ai_male.png');
+        this.load.image('avatar_ai_female', 'assets/avatars/avatar_ai_female.png');
+        this.load.image('avatar_ai_vip', 'assets/avatars/avatar_ai_vip.png');
+
         // Asset loading progress bar — soft glow behind narrow bar
         const barBg = this.add.graphics();
         this.load.on('progress', (v: number) => {

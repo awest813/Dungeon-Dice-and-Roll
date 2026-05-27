@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import {
     AVATAR_SPEED, AVATAR_SIZE, WORLD_W, WORLD_H,
-    COL_TRIM, COL_UI_BG2, DEPTH_AVATAR_BASE, DEPTH_SHADOW,
+    COL_TRIM, DEPTH_AVATAR_BASE, DEPTH_SHADOW,
     COL_NEON_BLUE, COL_NEON_PINK,
 } from '../../game/constants';
 
@@ -11,23 +11,12 @@ interface Blocker {
 
 export type FacingDir = 'down' | 'up' | 'left' | 'right';
 
-const PLAYER_BODY_SCALE = 0.84;
-
 export class AvatarController {
     private scene: Phaser.Scene;
     private aura!: Phaser.GameObjects.Ellipse;
     private pinkFloorGlow!: Phaser.GameObjects.Ellipse;
-    private leftArm!: Phaser.GameObjects.Ellipse;
-    private rightArm!: Phaser.GameObjects.Ellipse;
-    private leftLeg!: Phaser.GameObjects.Ellipse;
-    private rightLeg!: Phaser.GameObjects.Ellipse;
-    private shoulders!: Phaser.GameObjects.Ellipse;
-    private body!: Phaser.GameObjects.Arc;
-    private lapel!: Phaser.GameObjects.Triangle;
-    private head!: Phaser.GameObjects.Arc;
-    private hair!: Phaser.GameObjects.Arc;
-    private faceGlow!: Phaser.GameObjects.Arc;
-    private dot!: Phaser.GameObjects.Arc;    // facing indicator
+    private sprite!: Phaser.GameObjects.Image;
+    private walkTime = 0;
     private shadow!: Phaser.GameObjects.Ellipse;
     private nameTag!: Phaser.GameObjects.Text;
     private blockers: Blocker[] = [];
@@ -71,46 +60,11 @@ export class AvatarController {
             .setDepth(DEPTH_AVATAR_BASE - 1)
             .setBlendMode(Phaser.BlendModes.ADD);
 
-        this.leftLeg = this.scene.add.ellipse(this.x - AVATAR_SIZE * 0.36, this.y + AVATAR_SIZE * 0.92, AVATAR_SIZE * 0.45, AVATAR_SIZE * 0.9, 0x0a0c18)
-            .setDepth(DEPTH_AVATAR_BASE - 1);
-        this.rightLeg = this.scene.add.ellipse(this.x + AVATAR_SIZE * 0.36, this.y + AVATAR_SIZE * 0.92, AVATAR_SIZE * 0.45, AVATAR_SIZE * 0.9, 0x0a0c18)
-            .setDepth(DEPTH_AVATAR_BASE - 1);
-
-        this.leftArm = this.scene.add.ellipse(this.x - AVATAR_SIZE * 0.9, this.y + AVATAR_SIZE * 0.08, AVATAR_SIZE * 0.42, AVATAR_SIZE * 1.25, 0x10142b)
-            .setDepth(DEPTH_AVATAR_BASE);
-        this.rightArm = this.scene.add.ellipse(this.x + AVATAR_SIZE * 0.9, this.y + AVATAR_SIZE * 0.08, AVATAR_SIZE * 0.42, AVATAR_SIZE * 1.25, 0x10142b)
-            .setDepth(DEPTH_AVATAR_BASE);
-        this.leftArm.setStrokeStyle(1, COL_NEON_BLUE, 0.28);
-        this.rightArm.setStrokeStyle(1, COL_NEON_PINK, 0.28);
-
-        this.shoulders = this.scene.add.ellipse(this.x, this.y + AVATAR_SIZE * 0.15, AVATAR_SIZE * 1.85, AVATAR_SIZE * 1.35, 0x151a34)
-            .setDepth(DEPTH_AVATAR_BASE);
-        this.shoulders.setStrokeStyle(1.5, COL_NEON_PINK, 0.18);
-
-        // Body (torso)
-        this.body = this.scene.add.arc(this.x, this.y - 1, AVATAR_SIZE * PLAYER_BODY_SCALE, 0, 360, false, COL_UI_BG2)
-            .setDepth(DEPTH_AVATAR_BASE);
-        this.body.setStrokeStyle(2, COL_TRIM, 1);
-
-        this.lapel = this.scene.add.triangle(this.x, this.y - 1, 0, -AVATAR_SIZE * 0.55, -AVATAR_SIZE * 0.42, AVATAR_SIZE * 0.34, AVATAR_SIZE * 0.42, AVATAR_SIZE * 0.34, 0x1d2c46, 0.95)
-            .setDepth(DEPTH_AVATAR_BASE + 1);
-        this.lapel.setStrokeStyle(1, COL_NEON_BLUE, 0.3);
-
-        // Head
-        this.head = this.scene.add.arc(this.x, this.y - AVATAR_SIZE * 0.8, AVATAR_SIZE * 0.55, 0, 360, false, 0xd4a984)
-            .setDepth(DEPTH_AVATAR_BASE + 1);
-        this.head.setStrokeStyle(1.5, 0xb08060, 1);
-
-        this.faceGlow = this.scene.add.arc(this.x - AVATAR_SIZE * 0.15, this.y - AVATAR_SIZE * 0.95, AVATAR_SIZE * 0.18, 0, 360, false, 0xffe0b0, 0.42)
-            .setDepth(DEPTH_AVATAR_BASE + 2);
-
-        this.hair = this.scene.add.arc(this.x, this.y - AVATAR_SIZE * 0.95, AVATAR_SIZE * 0.42, 180, 360, false, 0x2a1a14)
-            .setDepth(DEPTH_AVATAR_BASE + 2);
-        this.hair.setStrokeStyle(1, 0x483024, 0.75);
-
-        // Facing dot
-        this.dot = this.scene.add.arc(this.x, this.y + AVATAR_SIZE * 0.6, 3, 0, 360, false, COL_TRIM)
-            .setDepth(DEPTH_AVATAR_BASE + 3);
+        // Main Chibi Character Sprite overlay
+        this.sprite = this.scene.add.image(this.x, this.y, 'avatar_player');
+        this.sprite.setOrigin(0.5, 0.72); // center on feet pivot
+        this.sprite.setDisplaySize(30, 44);
+        this.sprite.setDepth(DEPTH_AVATAR_BASE);
 
         // Name tag
         this.nameTag = this.scene.add.text(this.x, this.y - AVATAR_SIZE * 2.2, displayName, {
@@ -190,6 +144,12 @@ export class AvatarController {
             this.trailTimer = 0;
         }
 
+        if (this.isMoving) {
+            this.walkTime += delta;
+        } else {
+            this.walkTime = 0;
+        }
+
         this.syncSprite();
     }
 
@@ -199,61 +159,37 @@ export class AvatarController {
         this.shadow.setPosition(this.x, this.y + r - 2);
         this.pinkFloorGlow.setPosition(this.x, this.y + r * 0.55).setAlpha(this.isMoving ? 0.2 : 0.12);
         this.aura.setPosition(this.x, this.y - 2).setAlpha(this.isMoving ? 0.22 : 0.14);
-        this.leftLeg.setPosition(this.x - r * 0.36, this.y + r * 0.92);
-        this.rightLeg.setPosition(this.x + r * 0.36, this.y + r * 0.92);
-        this.leftArm.setPosition(this.x - r * 0.9, this.y + r * 0.08);
-        this.rightArm.setPosition(this.x + r * 0.9, this.y + r * 0.08);
-        this.shoulders.setPosition(this.x, this.y + r * 0.12);
-        this.body.setPosition(this.x, this.y - 1);
-        this.lapel.setPosition(this.x, this.y - 1);
-        this.head.setPosition(this.x, this.y - r * 0.8);
-        this.faceGlow.setPosition(this.x - r * 0.15, this.y - r * 0.95);
-        this.hair.setPosition(this.x, this.y - r * 0.95);
-        this.nameTag.setPosition(this.x, this.y - r * 2.4);
+
+        // Chibi Bobbing Animation
+        let bobY = 0;
+        if (this.isMoving) {
+            bobY = Math.sin(this.walkTime * 0.016) * 3.4;
+        }
+
+        // Horizontal flip on walking direction
+        if (this.facing === 'left') {
+            this.sprite.setFlipX(true);
+        } else if (this.facing === 'right') {
+            this.sprite.setFlipX(false);
+        }
+
+        this.sprite.setPosition(this.x, this.y + bobY);
+        this.nameTag.setPosition(this.x, this.y - r * 2.4 + bobY);
 
         // Depth sort: higher y = higher depth
         const depth = DEPTH_AVATAR_BASE + this.y * 0.1;
         this.pinkFloorGlow.setDepth(depth - 6);
         this.aura.setDepth(depth - 2);
-        this.leftLeg.setDepth(depth - 1);
-        this.rightLeg.setDepth(depth - 1);
-        this.leftArm.setDepth(depth);
-        this.rightArm.setDepth(depth);
-        this.shoulders.setDepth(depth);
-        this.body.setDepth(depth);
-        this.lapel.setDepth(depth + 1);
-        this.head.setDepth(depth + 1);
-        this.faceGlow.setDepth(depth + 2);
-        this.hair.setDepth(depth + 2);
+        this.sprite.setDepth(depth);
         this.nameTag.setDepth(depth + 4);
         this.shadow.setDepth(depth - 5);
-
-        // Facing indicator offset
-        const offsets: Record<FacingDir, [number, number]> = {
-            down:  [0,   r * 0.6],
-            up:    [0,  -r * 0.6],
-            left:  [-r * 0.6, 0],
-            right: [ r * 0.6, 0],
-        };
-        const [ox, oy] = offsets[this.facing];
-        this.dot.setPosition(this.x + ox, this.y + oy).setDepth(depth + 3);
     }
 
     destroy(): void {
         this.shadow.destroy();
         this.pinkFloorGlow.destroy();
         this.aura.destroy();
-        this.leftLeg.destroy();
-        this.rightLeg.destroy();
-        this.leftArm.destroy();
-        this.rightArm.destroy();
-        this.shoulders.destroy();
-        this.body.destroy();
-        this.lapel.destroy();
-        this.head.destroy();
-        this.faceGlow.destroy();
-        this.hair.destroy();
-        this.dot.destroy();
+        this.sprite.destroy();
         this.nameTag.destroy();
     }
 

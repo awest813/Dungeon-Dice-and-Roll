@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import {
     AVATAR_SPEED, AVATAR_SIZE, WORLD_W, WORLD_H,
-    COL_TRIM, DEPTH_AVATAR_BASE, DEPTH_SHADOW,
+    DEPTH_AVATAR_BASE, DEPTH_SHADOW,
 } from '../../game/constants';
 
 interface Blocker {
@@ -9,8 +9,6 @@ interface Blocker {
 }
 
 type FacingDir = 'down' | 'up' | 'left' | 'right';
-
-const AI_BODY_SCALE = 0.82;
 
 // Walkable waypoints spread around the casino floor (avoiding furniture)
 const WAYPOINTS: [number, number][] = [
@@ -37,13 +35,8 @@ export const AI_COLORS = [0x4488cc, 0xcc5544, 0x44cc88, 0xcc8844, 0x9955cc, 0x44
 export class AIWalker {
     private scene:    Phaser.Scene;
     private aura!:    Phaser.GameObjects.Ellipse;
-    private shoulders!: Phaser.GameObjects.Ellipse;
-    private leftLeg!: Phaser.GameObjects.Ellipse;
-    private rightLeg!: Phaser.GameObjects.Ellipse;
-    private body!:    Phaser.GameObjects.Arc;
-    private head!:    Phaser.GameObjects.Arc;
-    private hair!:    Phaser.GameObjects.Arc;
-    private dot!:     Phaser.GameObjects.Arc;
+    private sprite!:  Phaser.GameObjects.Image;
+    private walkTime: number = 0;
     private shadow!:  Phaser.GameObjects.Ellipse;
     private nameTag!: Phaser.GameObjects.Text;
     private blockers: Blocker[] = [];
@@ -83,47 +76,42 @@ export class AIWalker {
             .ellipse(this.x, this.y + r - 2, r * 2, r * 0.8, 0x000000, 0.30)
             .setDepth(DEPTH_SHADOW);
 
+        // Select visitor avatar sprite based on index modulo 3
+        const idx = AI_NAMES.indexOf(name);
+        let key = 'avatar_ai_male';
+        let auraColor = this.bodyColor;
+        let nameColorStr = Phaser.Display.Color.IntegerToColor(this.bodyColor).rgba;
+        let isBold = false;
+        let labelName = name;
+
+        if (idx % 3 === 0) {
+            key = 'avatar_ai_male';
+        } else if (idx % 3 === 1) {
+            key = 'avatar_ai_female';
+        } else {
+            key = 'avatar_ai_vip';
+            auraColor = 0xd4af37;      // Glowing luxury gold neon aura
+            nameColorStr = '#ffd700';   // Elegant gold color
+            isBold = true;
+            labelName = `${name} 👑`;
+        }
+
         this.aura = this.scene.add
-            .ellipse(this.x, this.y - 2, r * 2.3, r * 2.75, this.bodyColor, 0.08)
+            .ellipse(this.x, this.y - 2, r * 2.3, r * 2.75, auraColor, key === 'avatar_ai_vip' ? 0.12 : 0.08)
             .setDepth(DEPTH_AVATAR_BASE - 2)
             .setBlendMode(Phaser.BlendModes.ADD);
 
-        this.leftLeg = this.scene.add
-            .ellipse(this.x - r * 0.33, this.y + r * 0.82, r * 0.42, r * 0.82, 0x080a12)
-            .setDepth(DEPTH_AVATAR_BASE - 1);
-
-        this.rightLeg = this.scene.add
-            .ellipse(this.x + r * 0.33, this.y + r * 0.82, r * 0.42, r * 0.82, 0x080a12)
-            .setDepth(DEPTH_AVATAR_BASE - 1);
-
-        this.shoulders = this.scene.add
-            .ellipse(this.x, this.y + r * 0.12, r * 1.65, r * 1.12, 0x12172a)
-            .setDepth(DEPTH_AVATAR_BASE);
-        this.shoulders.setStrokeStyle(1, this.bodyColor, 0.45);
-
-        this.body = this.scene.add
-            .arc(this.x, this.y - 1, r * AI_BODY_SCALE, 0, 360, false, this.bodyColor)
-            .setDepth(DEPTH_AVATAR_BASE);
-        this.body.setStrokeStyle(2, COL_TRIM, 0.7);
-
-        this.head = this.scene.add
-            .arc(this.x, this.y - r * 0.8, r * 0.55, 0, 360, false, 0xd4a984)
-            .setDepth(DEPTH_AVATAR_BASE + 1);
-        this.head.setStrokeStyle(1.5, 0xb08060, 1);
-
-        this.hair = this.scene.add
-            .arc(this.x, this.y - r * 0.95, r * 0.4, 180, 360, false, 0x22130e)
-            .setDepth(DEPTH_AVATAR_BASE + 2);
-
-        this.dot = this.scene.add
-            .arc(this.x, this.y + r * 0.6, 3, 0, 360, false, COL_TRIM)
-            .setDepth(DEPTH_AVATAR_BASE + 2);
+        this.sprite = this.scene.add.image(this.x, this.y, key);
+        this.sprite.setOrigin(0.5, 0.72);
+        this.sprite.setDisplaySize(30, 44);
+        this.sprite.setDepth(DEPTH_AVATAR_BASE);
 
         this.nameTag = this.scene.add
-            .text(this.x, this.y - r * 2.2, name, {
+            .text(this.x, this.y - r * 2.2, labelName, {
                 fontFamily: 'monospace',
                 fontSize:   '10px',
-                color:      Phaser.Display.Color.IntegerToColor(this.bodyColor).rgba,
+                color:      nameColorStr,
+                fontStyle:  isBold ? 'bold' : 'normal',
             })
             .setOrigin(0.5, 1)
             .setDepth(DEPTH_AVATAR_BASE + 3);
@@ -171,9 +159,12 @@ export class AIWalker {
         // Pause at destination
         if (this.pauseTimer > 0) {
             this.pauseTimer -= delta;
+            this.walkTime = 0;
             this.syncSprite();
             return;
         }
+
+        this.walkTime += delta;
 
         const dx   = this.targetX - this.x;
         const dy   = this.targetY - this.y;
@@ -223,45 +214,34 @@ export class AIWalker {
 
         this.shadow.setPosition(this.x, this.y + r - 2);
         this.aura.setPosition(this.x, this.y - 2);
-        this.leftLeg.setPosition(this.x - r * 0.33, this.y + r * 0.82);
-        this.rightLeg.setPosition(this.x + r * 0.33, this.y + r * 0.82);
-        this.shoulders.setPosition(this.x, this.y + r * 0.12);
-        this.body.setPosition(this.x, this.y - 1);
-        this.head.setPosition(this.x, this.y - r * 0.8);
-        this.hair.setPosition(this.x, this.y - r * 0.95);
-        this.nameTag.setPosition(this.x, this.y - r * 2.4);
+
+        // Chibi bobbing walking animation
+        let bobY = 0;
+        if (this.pauseTimer <= 0) {
+            bobY = Math.sin(this.walkTime * 0.016) * 3.4;
+        }
+
+        // Horizontal flip depending on traveling direction
+        if (this.facing === 'left') {
+            this.sprite.setFlipX(true);
+        } else if (this.facing === 'right') {
+            this.sprite.setFlipX(false);
+        }
+
+        this.sprite.setPosition(this.x, this.y + bobY);
+        this.nameTag.setPosition(this.x, this.y - r * 2.4 + bobY);
 
         const depth = DEPTH_AVATAR_BASE + this.y * 0.1;
         this.aura.setDepth(depth - 2);
-        this.leftLeg.setDepth(depth - 1);
-        this.rightLeg.setDepth(depth - 1);
-        this.shoulders.setDepth(depth);
-        this.body.setDepth(depth);
-        this.head.setDepth(depth + 1);
-        this.hair.setDepth(depth + 2);
+        this.sprite.setDepth(depth);
         this.nameTag.setDepth(depth + 3);
         this.shadow.setDepth(depth - 5);
-
-        const offsets: Record<FacingDir, [number, number]> = {
-            down:  [0,       r * 0.6],
-            up:    [0,      -r * 0.6],
-            left:  [-r * 0.6, 0],
-            right: [ r * 0.6, 0],
-        };
-        const [ox, oy] = offsets[this.facing];
-        this.dot.setPosition(this.x + ox, this.y + oy).setDepth(depth + 2);
     }
 
     destroy(): void {
         this.shadow.destroy();
         this.aura.destroy();
-        this.leftLeg.destroy();
-        this.rightLeg.destroy();
-        this.shoulders.destroy();
-        this.body.destroy();
-        this.head.destroy();
-        this.hair.destroy();
-        this.dot.destroy();
+        this.sprite.destroy();
         this.nameTag.destroy();
     }
 }

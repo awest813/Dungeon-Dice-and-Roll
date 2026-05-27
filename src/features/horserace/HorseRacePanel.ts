@@ -52,6 +52,7 @@ export class HorseRacePanel {
 
     // Per-horse track bar graphics and position labels
     private laneGfxs:    Phaser.GameObjects.Graphics[] = [];
+    private horseSprites: Phaser.GameObjects.Text[] = [];
     // Selection highlight graphic per horse (left-side rows)
     private horseRowGfxs: Phaser.GameObjects.Graphics[] = [];
     private horseLabelTxts: Phaser.GameObjects.Text[] = [];
@@ -423,12 +424,21 @@ export class HorseRacePanel {
         this.container.add(trackGfx);
 
         // Per-horse progress bars (initially empty)
+        this.horseSprites = [];
         HORSES.forEach((horse, i) => {
             const ly    = TRACK_TOP + i * LANE_H + 8;
             const barH  = LANE_H - 16;
             const laneGfx = this.scene.add.graphics();
             this.container.add(laneGfx);
             this.laneGfxs.push(laneGfx);
+
+            // Create running horse text overlay at starting line
+            const horseText = this.scene.add.text(
+                TRACK_LEFT + 20, ly + barH / 2,
+                horse.emoji, { fontFamily: FONT, fontSize: '15px' }
+            ).setOrigin(0.5, 0.5);
+            this.container.add(horseText);
+            this.horseSprites.push(horseText);
 
             // Draw at 0 progress
             this.drawHorseBar(laneGfx, horse, ly, barH, 0, false);
@@ -558,9 +568,10 @@ export class HorseRacePanel {
         this.statusText.setText('🏇  Racing…');
         this.statusText.setColor('#c9a84c');
 
-        // Reset track bars
+        // Reset track bars and horse positions
         this.laneGfxs.forEach((gfx, i) => {
             this.drawHorseBar(gfx, HORSES[i], TRACK_TOP + i * LANE_H + 8, LANE_H - 16, 0, false);
+            this.horseSprites[i].setX(TRACK_LEFT + 20);
         });
 
         // Resolve result immediately but animate over 2 seconds
@@ -586,6 +597,12 @@ export class HorseRacePanel {
                 this.laneGfxs.forEach((gfx, i) => {
                     const prog = Math.min(stepIncrements[i] * step, resolved.progress[i]);
                     this.drawHorseBar(gfx, HORSES[i], TRACK_TOP + i * LANE_H + 8, LANE_H - 16, prog, false);
+                    
+                    // Update horse text x position to match progress bar front edge
+                    const tLeft = TRACK_LEFT + 20;
+                    const maxW  = TRACK_W - 22;
+                    const barW  = maxW * Math.min(prog, 1);
+                    this.horseSprites[i].setX(tLeft + barW);
                 });
 
                 if (step >= STEPS) {
@@ -607,6 +624,12 @@ export class HorseRacePanel {
         this.laneGfxs.forEach((gfx, i) => {
             this.drawHorseBar(gfx, HORSES[i], TRACK_TOP + i * LANE_H + 8, LANE_H - 16,
                 resolved.progress[i], i === resolved.winnerId);
+            
+            // Set final horse text position
+            const tLeft = TRACK_LEFT + 20;
+            const maxW  = TRACK_W - 22;
+            const barW  = maxW * Math.min(resolved.progress[i], 1);
+            this.horseSprites[i].setX(tLeft + barW);
         });
 
         // Highlight winner row
