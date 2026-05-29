@@ -44,7 +44,7 @@ const BET_OPTIONS = [10, 25, 50, 100];
 type DropState = 'idle' | 'dropping' | 'result';
 
 // Peg grid position
-interface Peg { x: number; y: number; row: number; col: number; }
+interface Peg { x: number; y: number; row: number; col: number; scale?: number; flash?: number; }
 
 export class PlinkoPanel {
     private scene:   Phaser.Scene;
@@ -65,6 +65,8 @@ export class PlinkoPanel {
     private dropBtnHit!:   Phaser.GameObjects.Rectangle;
     private betBtns: Array<{ gfx: Phaser.GameObjects.Graphics; label: Phaser.GameObjects.Text; amount: number }> = [];
     private slotHighlightGfx!: Phaser.GameObjects.Graphics;
+    private particleGfx!:  Phaser.GameObjects.Graphics;
+    private particles: Array<{ x: number; y: number; alpha: number; size: number; col: number }> = [];
     private escKey!:  Phaser.Input.Keyboard.Key;
     private spaceKey!: Phaser.Input.Keyboard.Key;
 
@@ -153,6 +155,10 @@ export class PlinkoPanel {
         // Slot highlight overlay (redrawn on each drop)
         this.slotHighlightGfx = this.scene.add.graphics();
         this.container.add(this.slotHighlightGfx);
+
+        // Particle graphics (rendered behind the ball, on top of pegs)
+        this.particleGfx = this.scene.add.graphics();
+        this.container.add(this.particleGfx);
 
         // Ball graphics (drawn on top)
         this.ballGfx = this.scene.add.graphics();
@@ -279,22 +285,8 @@ export class PlinkoPanel {
             }
         }
 
-        // Draw pegs
-        const g = this.boardGfx;
-        for (const peg of this.pegs) {
-            g.fillStyle(COL_PLINKO_ACCENT, 0.9);
-            g.fillCircle(peg.x, peg.y, PEG_RADIUS);
-            g.fillStyle(0xffffff, 0.15);
-            g.fillCircle(peg.x - 1, peg.y - 1, 1.5);
-        }
-
-        // Drop zone indicator (top center arrow)
-        g.fillStyle(COL_PLINKO_ACCENT, 0.7);
-        g.fillTriangle(
-            ox, oy + 6,
-            ox - 8, oy - 4,
-            ox + 8, oy - 4,
-        );
+        // Draw pegs via custom dynamic draw method
+        this.drawPegs();
 
         // ── Slot display (built separately so it can be rebuilt on risk change) ─
         this.buildSlotDisplay();
@@ -555,6 +547,8 @@ export class PlinkoPanel {
         this.dropBtnLabel.setText('DROPPING...').setColor('#0e6050');
         this.resultText.setText('');
         this.slotHighlightGfx.clear();
+        this.particles = [];
+        this.particleGfx.clear();
 
         // ── Compute ball path through the peg grid ────────────────────────────
         const { points, finalSlot } = this.computeBallPath();
@@ -644,9 +638,28 @@ export class PlinkoPanel {
                 // Slight squish on downward movement
                 const squish = this.ballY > from.y ? 1 + (1 - t) * 0.15 : 1;
                 this.drawBall(this.ballX, this.ballY, squish);
+
+                // Spawn fading sparkle particles
+                if (Math.random() < 0.75) {
+                    this.particles.push({
+                        x: this.ballX + (Math.random() - 0.5) * 6,
+                        y: this.ballY + (Math.random() - 0.5) * 6,
+                        alpha: 1.0,
+                        size: Phaser.Math.FloatBetween(1.5, 3.5),
+                        col: Math.random() < 0.25 ? 0xffffff : COL_PLINKO_ACCENT
+                    });
+                }
+                this.updateAndDrawParticles();
             },
             onComplete: () => {
                 if (this.closed) return;
+
+                // Find nearest peg and trigger bounce & white flash tween
+                const nearestPeg = this.findNearestPeg(this.ballX, this.ballY);
+                if (nearestPeg) {
+                    this.triggerPegBounce(nearestPeg);
+                }
+
                 this.pathIdx++;
                 this.animateBallStep();
             },
@@ -738,18 +751,99 @@ export class PlinkoPanel {
         // Ball gradient effect (outer glow)
         g.fillStyle(COL_PLINKO_ACCENT, 0.25);
         g.fillEllipse(x, y, (rx + 3) * 2, (ry + 3) * 2);
-
         // Ball body
         g.fillStyle(0xffffff, 1);
         g.fillEllipse(x, y, rx * 2, ry * 2);
 
-        // Ball shading
+        // Shading
         g.fillStyle(COL_PLINKO_ACCENT, 0.7);
         g.fillEllipse(x + 1, y + 1, rx * 1.4, ry * 1.4);
 
         // Highlight
         g.fillStyle(0xffffff, 0.9);
         g.fillEllipse(x - rx * 0.3, y - ry * 0.35, rx * 0.6, ry * 0.5);
+    }
+
+    private drawPegs(): void {
+        const g = this.boardGfx;
+        g.clear();
+        for (const peg of this.pegs) {
+            const scale = peg.scale || 1.0;
+            const flash = peg.flash || 0.0;
+            
+            // Base peg color
+            const baseColor = COL_PLINKO_ACCENT;
+            // Interpolate color on flash
+            const col = Phaser.Display.Color.Interpolate.ColorWithColor(
+                Phaser.Display.Color.IntegerToColor(baseColor),
+                Phaser.Display.Color.IntegerToColor(0xffffff),
+                100,
+                flash * 100
+            );
+            const colorHex = Phaser.Display.Color.ObjectToColor(col).color;
+
+            g.fillStyle(colorHex, 0.9 + flash * 0.1);
+            g.fillCircle(peg.x, peg.y, PEG_RADIUS * scale);
+            
+            // Specular highlight
+            g.fillStyle(0xffffff, 0.15 + flash * 0.65);
+            g.fillCircle(peg.x - 1 * scale, peg.y - 1 * scale, 1.5 * scale);
+        }
+
+        // Draw top drop zone indicator (arrow)
+        g.fillStyle(COL_PLINKO_ACCENT, 0.7);
+        g.fillTriangle(
+            this.boardOffsetX, this.boardOffsetY + 6,
+            this.boardOffsetX - 8, this.boardOffsetY - 4,
+            this.boardOffsetX + 8, this.boardOffsetY - 4
+        );
+    }
+
+    private findNearestPeg(bx: number, by: number): Peg | null {
+        let nearest: Peg | null = null;
+        let minDist = 16; // max distance to trigger peg bounce (px)
+        for (const peg of this.pegs) {
+            const d = Phaser.Math.Distance.Between(bx, by, peg.x, peg.y);
+            if (d < minDist) {
+                minDist = d;
+                nearest = peg;
+            }
+        }
+        return nearest;
+    }
+
+    private triggerPegBounce(peg: Peg): void {
+        peg.scale = 1.8;
+        peg.flash = 1.0;
+        this.scene.tweens.add({
+            targets: peg,
+            scale: 1.0,
+            flash: 0.0,
+            duration: 200,
+            ease: 'Quad.easeOut',
+            onUpdate: () => {
+                if (!this.closed) this.drawPegs();
+            }
+        });
+    }
+
+    private updateAndDrawParticles(): void {
+        const pg = this.particleGfx;
+        pg.clear();
+        
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            const p = this.particles[i];
+            p.alpha -= 0.045; // fade out
+            p.y += 0.4;      // gravity drift
+            
+            if (p.alpha <= 0) {
+                this.particles.splice(i, 1);
+                continue;
+            }
+            
+            pg.fillStyle(p.col, p.alpha);
+            pg.fillCircle(p.x, p.y, p.size);
+        }
     }
 
     private highlightSlot(slotIdx: number): void {
@@ -764,18 +858,33 @@ export class PlinkoPanel {
         const sx    = ox - BOARD_W / 2 + slotIdx * slotW;
         const col   = slotColor(this.getMultipliers()[slotIdx]);
 
-        // Bright border flash
-        g.lineStyle(2, col, 1);
+        // Bright double-layer neon borders
+        g.lineStyle(4, col, 0.4);
         g.strokeRect(sx + 1, slotY + 1, slotW - 2, slotH - 2);
-        g.fillStyle(col, 0.35);
+        g.lineStyle(1.5, 0xffffff, 0.95);
+        g.strokeRect(sx + 1, slotY + 1, slotW - 2, slotH - 2);
+        g.fillStyle(col, 0.4);
         g.fillRect(sx + 1, slotY + 1, slotW - 2, slotH - 2);
 
         // Glow lines above winning slot
-        g.lineStyle(1, col, 0.5);
+        g.lineStyle(2, col, 0.6);
         g.lineBetween(sx + slotW / 2, slotY - 20, sx + slotW / 2, slotY);
-        g.lineStyle(1, col, 0.25);
+        g.lineStyle(1.5, 0xffffff, 0.9);
         g.lineBetween(sx + slotW / 2 - 4, slotY - 14, sx + slotW / 2 - 4, slotY);
         g.lineBetween(sx + slotW / 2 + 4, slotY - 14, sx + slotW / 2 + 4, slotY);
+
+        // Pulse scale multiplier text label
+        const lbl = this.slotLabelObjs[slotIdx];
+        if (lbl) {
+            this.scene.tweens.add({
+                targets: lbl,
+                scaleX: 1.6,
+                scaleY: 1.6,
+                yoyo: true,
+                duration: 150,
+                ease: 'Back.easeOut'
+            });
+        }
     }
 
     private showChipDelta(text: string, color: string): void {

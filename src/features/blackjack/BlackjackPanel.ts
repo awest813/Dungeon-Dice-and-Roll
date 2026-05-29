@@ -467,6 +467,12 @@ export class BlackjackPanel {
             const dText = net > 0 ? `+${net}◈` : `${net}◈`;
             this.showChipDelta(dText, net > 0 ? '#2ecc71' : '#e74c3c');
         }
+        
+        // Trigger Flying Chips payout animation
+        if (net !== 0) {
+            this.animateFlyingChips(net > 0);
+        }
+
         if (delta > 0) GameState.addChips(delta);
 
         // Toast notification for significant outcomes
@@ -569,6 +575,43 @@ export class BlackjackPanel {
         this.splitResultText.setAlpha(0);
         this.showPhaseUI();
         this.refreshDisplay();
+    }
+
+    private animateFlyingChips(win: boolean): void {
+        const startX = win ? 0 : -PW / 2 + 120;
+        const startY = win ? -PH / 2 + 110 : PH / 2 - 100;
+        const endX   = win ? -PW / 2 + 120 : 0;
+        const endY   = win ? PH / 2 - 100 : -PH / 2 + 110;
+
+        const count = 6;
+        for (let i = 0; i < count; i++) {
+            const chip = this.scene.add.graphics();
+            chip.fillStyle(0xffd700, 1.0); // gold
+            chip.fillCircle(0, 0, 8);
+            chip.lineStyle(1.5, 0xc9a84c, 1);
+            chip.strokeCircle(0, 0, 8);
+            chip.fillStyle(0xffffff, 0.4);
+            chip.fillCircle(-2, -2, 3);
+            chip.setPosition(startX, startY);
+            chip.setDepth(DEPTH_PANEL + 5);
+            chip.setAlpha(0);
+            this.container.add(chip);
+
+            this.scene.tweens.add({
+                targets: chip,
+                x: endX + (Math.random() - 0.5) * 20,
+                y: endY + (Math.random() - 0.5) * 20,
+                alpha: { from: 0, to: 0.95 },
+                scaleX: { from: 0.7, to: 1.0 },
+                scaleY: { from: 0.7, to: 1.0 },
+                duration: 650,
+                delay: i * 80,
+                ease: 'Back.easeOut',
+                onComplete: () => {
+                    chip.destroy();
+                }
+            });
+        }
     }
 
     private offerFreeChips(): void {
@@ -780,46 +823,85 @@ export class BlackjackPanel {
         const w = 40;
         const h = 58;
 
+        // Create a separate card container so we can animate it as a single physical entity!
+        const cardContainer = this.scene.add.container(x, y);
+        this.container.add(cardContainer);
+
         const shadow = this.scene.add.graphics();
         shadow.fillStyle(0x000000, 0.4);
-        shadow.fillRoundedRect(x - w / 2 + 2, y - h / 2 + 3, w, h, 3);
-        this.container.add(shadow);
+        shadow.fillRoundedRect(-w / 2 + 2, -h / 2 + 3, w, h, 3);
+        cardContainer.add(shadow);
+
+        const cardComponents: Phaser.GameObjects.GameObject[] = [shadow];
 
         if (hidden) {
-            const backImg = this.scene.add.image(x, y, 'card_back');
+            const backImg = this.scene.add.image(0, 0, 'card_back');
             backImg.setDisplaySize(w, h);
-            this.container.add(backImg);
-            return [shadow, backImg];
+            cardContainer.add(backImg);
+            cardComponents.push(backImg);
+        } else {
+            const bg = this.scene.add.graphics();
+            const red = isRed(card);
+            
+            // Double-nested golden/neon card borders
+            bg.lineStyle(2.5, red ? 0xff4040 : 0xc9a84c, 0.25);
+            bg.strokeRoundedRect(-w / 2 - 1.5, -h / 2 - 1.5, w + 3, h + 3, 4);
+
+            bg.fillStyle(red ? 0xfff0f0 : 0xf8f8f8, 1);
+            bg.fillRoundedRect(-w / 2, -h / 2, w, h, 3);
+            bg.lineStyle(1.5, red ? 0xc0a0a0 : 0xa0a0a8, 0.8);
+            bg.strokeRoundedRect(-w / 2, -h / 2, w, h, 3);
+
+            const col = red ? '#c82020' : '#111118';
+            const lbl = rankLabel(card.rank);
+
+            const topLeft = this.scene.add.text(-w / 2 + 3, -h / 2 + 2, lbl, {
+                fontFamily: FONT, fontSize: '9px', color: col, fontStyle: 'bold',
+            }).setOrigin(0, 0);
+            
+            const suitKey = `suit_${card.suit}`;
+            const centerSuit = this.scene.add.image(0, 4, suitKey);
+            centerSuit.setDisplaySize(18, 18);
+            
+            const bottomRight = this.scene.add.text(w / 2 - 3, h / 2 - 2, lbl, {
+                fontFamily: FONT, fontSize: '9px', color: col, fontStyle: 'bold',
+            }).setOrigin(1, 1);
+
+            cardContainer.add([bg, topLeft, centerSuit, bottomRight]);
+            cardComponents.push(bg, topLeft, centerSuit, bottomRight);
         }
 
-        const bg = this.scene.add.graphics();
-        const red = isRed(card);
-        bg.fillStyle(red ? 0xfff0f0 : 0xf8f8f8, 1);
-        bg.fillRoundedRect(x - w / 2, y - h / 2, w, h, 3);
-        bg.lineStyle(1.5, red ? 0xc0a0a0 : 0xa0a0a8, 0.8);
-        bg.strokeRoundedRect(x - w / 2, y - h / 2, w, h, 3);
-
-        const col = red ? '#c82020' : '#111118';
-        const lbl = rankLabel(card.rank);
-
-        const topLeft = this.scene.add.text(x - w / 2 + 3, y - h / 2 + 2, lbl, {
-            fontFamily: FONT, fontSize: '9px', color: col, fontStyle: 'bold',
-        }).setOrigin(0, 0);
+        // ── Card Slide & Flip Animation ──
+        const shoeX = PW / 2 - 40;
+        const shoeY = -PH / 2 + 100;
         
-        const suitKey = `suit_${card.suit}`;
-        const centerSuit = this.scene.add.image(x, y + 4, suitKey);
-        centerSuit.setDisplaySize(18, 18);
-        
-        const bottomRight = this.scene.add.text(x + w / 2 - 3, y + h / 2 - 2, lbl, {
-            fontFamily: FONT, fontSize: '9px', color: col, fontStyle: 'bold',
-        }).setOrigin(1, 1);
+        cardContainer.setPosition(shoeX, shoeY);
+        cardContainer.setAlpha(0);
+        cardContainer.setScale(0.85);
 
-        this.container.add(bg);
-        this.container.add(topLeft);
-        this.container.add(centerSuit);
-        this.container.add(bottomRight);
+        this.scene.tweens.add({
+            targets: cardContainer,
+            x,
+            y,
+            alpha: 1,
+            scaleX: 1,
+            scaleY: 1,
+            duration: 380,
+            ease: 'Cubic.easeOut',
+            onComplete: () => {
+                if (!hidden) {
+                    this.scene.tweens.add({
+                        targets: cardContainer,
+                        scaleX: 0,
+                        duration: 120,
+                        yoyo: true,
+                        ease: 'Quad.easeIn'
+                    });
+                }
+            }
+        });
 
-        return [shadow, bg, topLeft, centerSuit, bottomRight];
+        return [cardContainer];
     }
 
     private updateHandValues(): void {

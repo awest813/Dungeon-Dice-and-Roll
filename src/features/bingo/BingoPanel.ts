@@ -35,7 +35,6 @@ const CTRL_CX   = CARD_LEFT + 5 * CELL_W + 30 + (PW / 2 - (CARD_LEFT + 5 * CELL_
 
 // ── Colors ────────────────────────────────────────────────────────────────────
 const COL_CELL_EMPTY  = 0x050e1a;
-const COL_CELL_MARKED = 0x003a5a;
 const COL_CELL_FREE   = 0x003a20;
 const COL_CELL_WIN    = 0x005a00;
 const COL_HEADER_BG   = 0x002a3a;
@@ -534,6 +533,22 @@ export class BingoPanel {
         this.refreshHistory();
         this.refreshBallsLeft();
 
+        // Check if called ball matches any coordinate on card (splat animation)
+        let matchedCell: { row: number, col: number } | null = null;
+        for (let r = 0; r < 5; r++) {
+            for (let c = 0; c < 5; c++) {
+                if (newState.card.grid[r][c] === ball) {
+                    matchedCell = { row: r, col: c };
+                    break;
+                }
+            }
+            if (matchedCell) break;
+        }
+
+        if (matchedCell) {
+            this.animateInkSplat(matchedCell.row, matchedCell.col);
+        }
+
         if (newState.phase === 'playing') {
             this.refreshStatus(`Ball ${newState.calledBalls.length} of ${BALL_LIMIT} — keep going!`);
         } else {
@@ -542,15 +557,114 @@ export class BingoPanel {
         }
     }
 
+    private animateInkSplat(row: number, col: number): void {
+        if (this.closed) return;
+        const cx2 = CARD_LEFT + col * CELL_W + CELL_W / 2;
+        const cy2 = CARD_TOP + HEADER_H + row * CELL_H + CELL_H / 2;
+
+        const splat = this.scene.add.graphics();
+        splat.setDepth(DEPTH_PANEL + 2);
+        this.container.add(splat);
+
+        // Tween the spreading ink splat circle scale/alpha
+        this.scene.tweens.add({
+            targets: splat,
+            alpha: { from: 0.9, to: 0.25 },
+            scaleX: { from: 0.1, to: 1 },
+            scaleY: { from: 0.1, to: 1 },
+            duration: 350,
+            ease: 'Cubic.easeOut',
+            onUpdate: () => {
+                if (this.closed) return;
+                splat.clear();
+                splat.fillStyle(COL_BINGO_ACCENT, 1);
+                splat.fillCircle(cx2, cy2, 14);
+                splat.lineStyle(1.5, COL_BINGO_ACCENT, 0.9);
+                splat.strokeCircle(cx2, cy2, 14);
+            },
+            onComplete: () => {
+                if (this.closed) return;
+                splat.destroy();
+                this.refreshCard();
+            }
+        });
+
+        // Erupt a small burst of radial splatter particles!
+        const particlesCount = 8;
+        for (let i = 0; i < particlesCount; i++) {
+            const angle = (Math.PI * 2 * i) / particlesCount + (Math.random() - 0.5) * 0.4;
+            const dist = 12 + Math.random() * 12;
+            
+            const p = this.scene.add.graphics();
+            p.fillStyle(COL_BINGO_ACCENT, 0.95);
+            p.fillCircle(0, 0, 2 + Math.random() * 2);
+            p.setPosition(cx2, cy2);
+            p.setDepth(DEPTH_PANEL + 3);
+            this.container.add(p);
+
+            this.scene.tweens.add({
+                targets: p,
+                x: cx2 + Math.cos(angle) * dist,
+                y: cy2 + Math.sin(angle) * dist,
+                alpha: 0,
+                scaleX: 0.2,
+                scaleY: 0.2,
+                duration: 400 + Math.random() * 150,
+                ease: 'Quad.easeOut',
+                onComplete: () => {
+                    if (!this.closed && p && p.destroy) {
+                        p.destroy();
+                    }
+                }
+            });
+        }
+    }
+
+    private triggerConfettiExplosion(): void {
+        if (this.closed) return;
+        const colors = [0xff4080, 0x00c8ff, 0x40ff80, 0xffd700, 0xc040ff, 0xffa020];
+        const confettiCount = 50;
+
+        for (let i = 0; i < confettiCount; i++) {
+            const confetti = this.scene.add.graphics();
+            const col = Phaser.Utils.Array.GetRandom(colors);
+            confetti.fillStyle(col, 0.95);
+            confetti.fillRect(-4, -6, 8, 12);
+            
+            // Initial random positions around the panel
+            const startX = (Math.random() - 0.5) * (PW - 60);
+            const startY = -PH / 2 - 20; // start off-screen at the top
+            confetti.setPosition(startX, startY);
+            confetti.setDepth(DEPTH_PANEL + 4);
+            this.container.add(confetti);
+
+            // Animate falling, swaying, and rotating
+            this.scene.tweens.add({
+                targets: confetti,
+                x: startX + (Math.random() - 0.5) * 120, // sway horizontally
+                y: PH / 2 + 20, // fall all the way down
+                angle: Math.random() * 720, // spin
+                duration: 1800 + Math.random() * 1200,
+                delay: Math.random() * 400,
+                ease: 'Quad.easeOut',
+                onComplete: () => {
+                    if (!this.closed && confetti && confetti.destroy) {
+                        confetti.destroy();
+                    }
+                }
+            });
+        }
+    }
+
     private handleGameEnd(): void {
         this.totalGames++;
         this.totalWagered += this.gameState.bet;
 
         if (this.gameState.phase === 'won') {
-            // Bet was already deducted at game start; pay out full multiplied amount
             const winnings = this.gameState.bet * PAYOUTS[this.gameState.winType as WinType];
             GameState.addChips(winnings);
             this.totalWon += winnings;
+            this.triggerConfettiExplosion();
 
             if (this.gameState.winType === 'blackout') {
                 this.refreshStatus(`🎉 BLACKOUT! Won ${winnings} chips (${PAYOUTS.blackout}×)!`);
@@ -564,7 +678,6 @@ export class BingoPanel {
                 ToastManager.show(this.scene, `BINGO! +${winnings} ◈`, 'win');
             }
         } else {
-            // Bust — bet already deducted, nothing to add back
             this.refreshStatus(`😞 Bust! No line in ${BALL_LIMIT} balls. Lost ${this.gameState.bet} chips.`);
             this.statusText.setColor('#e74c3c');
             ToastManager.show(this.scene, `-${this.gameState.bet} ◈`, 'loss');
@@ -649,7 +762,7 @@ export class BingoPanel {
                 if (isFree) {
                     fillColor = COL_CELL_FREE;
                 } else if (isMarked) {
-                    fillColor = COL_CELL_MARKED;
+                    fillColor = 0x00223a; // deep neon blue match felt
                 } else {
                     fillColor = COL_CELL_EMPTY;
                 }
@@ -657,17 +770,43 @@ export class BingoPanel {
                 gfx.fillStyle(fillColor, 1);
                 gfx.fillRect(cx2, cy2, CELL_W - 1, CELL_H - 1);
 
-                const borderColor = isFree
-                    ? 0x20a060
-                    : isMarked ? COL_BINGO_ACCENT : 0x0a2030;
-                gfx.lineStyle(1, borderColor, isMarked ? 0.8 : 0.35);
+                // Add glossy reflection layer at the top of cell
+                gfx.fillStyle(0xffffff, isMarked ? 0.05 : 0.01);
+                gfx.fillRect(cx2, cy2, CELL_W - 1, (CELL_H - 1) / 2);
+
+                // Gold-neon border/bezel
+                let borderColor: number;
+                let borderAlpha: number;
+                let borderWidth: number;
+
+                if (isFree) {
+                    borderColor = 0x2ecc71;
+                    borderAlpha = 0.85;
+                    borderWidth = 1.5;
+                } else if (isMarked) {
+                    borderColor = 0xffd700; // gold bezel on match!
+                    borderAlpha = 0.95;
+                    borderWidth = 1.5;
+                } else {
+                    borderColor = 0x10304a; // neon cyan/blue dim
+                    borderAlpha = 0.45;
+                    borderWidth = 1.0;
+                }
+
+                gfx.lineStyle(borderWidth, borderColor, borderAlpha);
                 gfx.strokeRect(cx2, cy2, CELL_W - 1, CELL_H - 1);
 
-                // Daub circle for marked cells
+                // Nested inner glow bezel for marked/free cells
+                if (isMarked || isFree) {
+                    gfx.lineStyle(0.8, isFree ? 0x40ff80 : 0x00c8ff, 0.6);
+                    gfx.strokeRect(cx2 + 2, cy2 + 2, CELL_W - 5, CELL_H - 5);
+                }
+
+                // Daub circle for marked cells (draws on top of background)
                 if (isMarked && !isFree) {
-                    gfx.fillStyle(COL_BINGO_ACCENT, 0.25);
+                    gfx.fillStyle(0x00c8ff, 0.18);
                     gfx.fillCircle(cx2 + CELL_W / 2, cy2 + CELL_H / 2, 14);
-                    gfx.lineStyle(1.5, COL_BINGO_ACCENT, 0.7);
+                    gfx.lineStyle(1, 0x00c8ff, 0.5);
                     gfx.strokeCircle(cx2 + CELL_W / 2, cy2 + CELL_H / 2, 14);
                 }
 

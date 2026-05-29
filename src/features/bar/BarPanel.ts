@@ -266,24 +266,10 @@ export class BarPanel {
                 haloGfx.strokeCircle(haloX, by, 13);
             }
 
-            // Cocktail glass silhouette on the left side of each button
+            // Custom glass silhouette on the left side of each button
             const glassGfx = this.scene.add.graphics();
             const gx = haloX + 26;  // position relative to halo
-            if (!alreadyDisabled) {
-                const glassColor = isSpecial ? 0xe0c060 : 0x8a6a30;
-                const glassAlpha = 0.45;
-                // Triangular glass body (wide at top, narrow at bottom)
-                glassGfx.fillStyle(glassColor, glassAlpha);
-                glassGfx.fillTriangle(gx - 7, by - 11, gx + 7, by - 11, gx, by + 3);
-                // Stem
-                glassGfx.lineStyle(1, glassColor, glassAlpha);
-                glassGfx.lineBetween(gx, by + 3, gx, by + 9);
-                // Base
-                glassGfx.lineBetween(gx - 5, by + 9, gx + 5, by + 9);
-                // Top rim
-                glassGfx.lineStyle(0.5, glassColor, glassAlpha * 0.6);
-                glassGfx.lineBetween(gx - 7, by - 11, gx + 7, by - 11);
-            }
+            this.drawGlassSilhouette(glassGfx, gx, by, i, alreadyDisabled, 1.0);
 
             const nameLabel = this.scene.add.text(-pw / 2 + 46, by - 8, `${drink.emoji}  ${drink.name}`, {
                 fontFamily: 'monospace', fontSize: '12px',
@@ -322,7 +308,7 @@ export class BarPanel {
             this.container.add([rect, haloGfx, glassGfx, nameLabel, descLabel, costLabel]);
         });
 
-        // Gambling Tip button
+        // Gambling Tip button with neon expand hover card
         const tipY = startY + ALL_DRINKS.length * (bh + gap) + bh / 2 + 6;
         const tipRect = this.scene.add.rectangle(0, tipY, pw - 60, 26, 0x0a1a0a, 1)
             .setStrokeStyle(1, 0x2a4a1a, 1)
@@ -330,10 +316,18 @@ export class BarPanel {
         const tipLabel = this.scene.add.text(0, tipY, '🎲  Ask for a gambling tip  (free)', {
             fontFamily: 'monospace', fontSize: '10px', color: '#3a7a3a',
         }).setOrigin(0.5);
-        tipRect.on('pointerover', () => tipRect.setFillStyle(0x1a2a1a));
-        tipRect.on('pointerout',  () => tipRect.setFillStyle(0x0a1a0a));
+        tipRect.on('pointerover', () => {
+            tipRect.setFillStyle(0x153515);
+            tipRect.setStrokeStyle(1.5, 0x00ff80, 1.0);
+            this.scene.tweens.add({ targets: [tipRect, tipLabel], scaleX: 1.02, scaleY: 1.02, duration: 100 });
+        });
+        tipRect.on('pointerout',  () => {
+            tipRect.setFillStyle(0x0a1a0a);
+            tipRect.setStrokeStyle(1, 0x2a4a1a, 1.0);
+            this.scene.tweens.add({ targets: [tipRect, tipLabel], scaleX: 1.0, scaleY: 1.0, duration: 100 });
+        });
         tipRect.on('pointerdown', () => { tipRect.setFillStyle(0x081008); this.showGamblingTip(); });
-        tipRect.on('pointerup',   () => tipRect.setFillStyle(0x1a2a1a));
+        tipRect.on('pointerup',   () => tipRect.setFillStyle(0x153515));
         this.container.add([tipRect, tipLabel]);
 
         // Status message area
@@ -408,10 +402,70 @@ export class BarPanel {
             ToastManager.show(this.scene, `${drink.name}: +${drink.bonusChips} ◈`, 'win');
         }
 
+        const drinkIdx = ALL_DRINKS.findIndex(d => d.name === drink.name);
+        
+        // Find specific graphics and containers for pouring animation
+        // Left side glass index relative to container
+        const pw = 480;
+        const startY = -480 / 2 + 108;
+        const bh = 36;
+        const gap = 4;
+        const by = startY + drinkIdx * (bh + gap) + bh / 2;
+        const haloX = -pw / 2 + 36;
+        const gx = haloX + 26;
+
+        // Create specific graphic refs for animation
+        const glassGfx = this.scene.add.graphics().setDepth(DEPTH_PANEL + 2);
+        const haloGfx = this.scene.add.graphics().setDepth(DEPTH_PANEL + 2);
+        this.container.add([glassGfx, haloGfx]);
+
+        // Disable button row temporarily during pouring
+        rect.disableInteractive();
+
+        // Animate pouring liquid
+        let fillProgress = { val: 0.0 };
+        this.scene.tweens.add({
+            targets: fillProgress,
+            val: 1.0,
+            duration: 850,
+            ease: 'Quad.easeOut',
+            onUpdate: () => {
+                if (this.closed) return;
+                const v = fillProgress.val;
+                
+                // Redraw glass with increasing fill level
+                this.drawGlassSilhouette(glassGfx, gx, by, drinkIdx, false, v);
+                
+                // Draw pouring stream
+                haloGfx.clear();
+                if (v < 0.95) {
+                    const pourCol = drinkIdx === 4 ? 0xff40a0 : drinkIdx === 5 ? 0x40ff80 : drinkIdx === 1 ? 0xd07010 : 0xffcc40;
+                    haloGfx.lineStyle(2.0, pourCol, 0.85);
+                    haloGfx.lineBetween(gx, by - 16, gx, by + 11 - 22 * v);
+                    
+                    // Splash effect
+                    haloGfx.fillStyle(pourCol, 0.7);
+                    haloGfx.fillCircle(gx + (Math.random() - 0.5) * 4, by + 11 - 22 * v + (Math.random() - 0.5) * 3, 2);
+                } else {
+                    // Regular glow halo when filled
+                    const haloColor = drinkIdx === 4 ? 0xff40a0 : drinkIdx === 5 ? 0x40ff80 : 0xc9a84c;
+                    haloGfx.fillStyle(haloColor, 0.06);
+                    haloGfx.fillCircle(haloX, by, 18);
+                    haloGfx.fillStyle(haloColor, 0.10);
+                    haloGfx.fillCircle(haloX, by, 13);
+                    haloGfx.lineStyle(0.5, haloColor, 0.35);
+                    haloGfx.strokeCircle(haloX, by, 13);
+                }
+            },
+            onComplete: () => {
+                if (this.closed) return;
+                if (!drink.oncePerSession) rect.setInteractive();
+            }
+        });
+
         if (drink.oncePerSession) {
             _sessionClaimedBonuses.add(drink.name);
             nameLabel.setColor('#444444');
-            // Immediately dim the button so the claimed state is visible without mouse-out
             rect.setFillStyle(disabledColor);
         }
 
@@ -434,6 +488,116 @@ export class BarPanel {
             ease: 'Sine.easeOut',
             onComplete: () => { this.statusText.setScale(1); },
         });
+    }
+
+    private drawGlassSilhouette(
+        g: Phaser.GameObjects.Graphics,
+        gx: number, gy: number,
+        type: number,
+        disabled: boolean,
+        fillLevel: number = 1.0
+    ): void {
+        g.clear();
+        if (disabled) return;
+
+        const isSpecial = type === this.specialIdx;
+        const col = isSpecial ? 0xffd700 : 0xc9a84c;
+        const alpha = 0.5;
+
+        g.lineStyle(1.2, col, alpha);
+        
+        switch (type) {
+            case 0: // Pint Glass (Lemonade)
+                g.lineBetween(gx - 7, gy - 11, gx + 7, gy - 11);
+                g.lineBetween(gx - 7, gy - 11, gx - 5, gy + 11);
+                g.lineBetween(gx + 7, gy - 11, gx + 5, gy + 11);
+                g.lineBetween(gx - 5, gy + 11, gx + 5, gy + 11);
+                
+                if (fillLevel > 0) {
+                    const fillH = 22 * fillLevel;
+                    const fillY = gy + 11 - fillH;
+                    const wLeft = gx - 5 - (1 - fillLevel) * 2;
+                    const wRight = gx + 5 + (1 - fillLevel) * 2;
+                    g.fillStyle(0xffe040, 0.45);
+                    g.fillRoundedRect(wLeft, fillY, wRight - wLeft, fillH, { tl: 0, tr: 0, bl: 2, br: 2 });
+                }
+                break;
+            case 1: // Beer Mug (Lager)
+                g.strokeRoundedRect(gx - 7, gy - 10, 14, 20, 2);
+                g.lineStyle(1.2, col, alpha);
+                g.strokeRoundedRect(gx + 7, gy - 6, 4, 12, 1);
+                
+                if (fillLevel > 0) {
+                    const fillH = 18 * fillLevel;
+                    const fillY = gy + 10 - fillH;
+                    g.fillStyle(0xd07010, 0.5);
+                    g.fillRoundedRect(gx - 6, fillY, 12, fillH, { tl: 0, tr: 0, bl: 1, br: 1 });
+                    
+                    if (fillLevel >= 0.9) {
+                        g.fillStyle(0xffffff, 0.7);
+                        g.fillEllipse(gx, gy - 9, 13, 3);
+                    }
+                }
+                break;
+            case 2: // Champagne Flute (Sparkling)
+                g.lineBetween(gx - 4, gy - 11, gx + 4, gy - 11);
+                g.lineBetween(gx - 4, gy - 11, gx - 3, gy + 1);
+                g.lineBetween(gx + 4, gy - 11, gx + 3, gy + 1);
+                g.lineBetween(gx - 3, gy + 1, gx + 3, gy + 1);
+                g.lineBetween(gx, gy + 1, gx, gy + 9);
+                g.lineBetween(gx - 5, gy + 9, gx + 5, gy + 9);
+
+                if (fillLevel > 0) {
+                    const fillH = 12 * fillLevel;
+                    const fillY = gy + 1 - fillH;
+                    g.fillStyle(0xffd060, 0.4);
+                    g.fillRoundedRect(gx - 3, fillY, 6, fillH, { tl: 0, tr: 0, bl: 1, br: 1 });
+                }
+                break;
+            case 3: // Snifter Snob Glass (Bourbon)
+                g.lineBetween(gx - 5, gy - 10, gx + 5, gy - 10);
+                g.lineBetween(gx - 5, gy - 10, gx - 8, gy);
+                g.lineBetween(gx + 5, gy - 10, gx + 8, gy);
+                g.lineBetween(gx - 8, gy, gx - 5, gy + 4);
+                g.lineBetween(gx + 8, gy, gx + 5, gy + 4);
+                g.lineBetween(gx - 5, gy + 4, gx + 5, gy + 4);
+                g.lineBetween(gx, gy + 4, gx, gy + 8);
+                g.lineBetween(gx - 6, gy + 8, gx + 6, gy + 8);
+
+                if (fillLevel > 0) {
+                    const fillH = 10 * fillLevel;
+                    const fillY = gy + 4 - fillH;
+                    g.fillStyle(0x8a4513, 0.6);
+                    g.fillRoundedRect(gx - 7, fillY, 14, fillH, { tl: 0, tr: 0, bl: 2, br: 2 });
+                }
+                break;
+            case 4: // Shot Glass (Lucky Shot)
+                g.lineBetween(gx - 5, gy - 5, gx + 5, gy - 5);
+                g.lineBetween(gx - 5, gy - 5, gx - 3.5, gy + 9);
+                g.lineBetween(gx + 5, gy - 5, gx + 3.5, gy + 9);
+                g.lineBetween(gx - 3.5, gy + 9, gx + 3.5, gy + 9);
+
+                if (fillLevel > 0) {
+                    const fillH = 14 * fillLevel;
+                    const fillY = gy + 9 - fillH;
+                    g.fillStyle(0xff40a0, 0.55);
+                    g.fillRoundedRect(gx - 3.5, fillY, 7, fillH, { tl: 0, tr: 0, bl: 1, br: 1 });
+                }
+                break;
+            case 5: // Juice Box / Straw highball (Jackpot Juice)
+                g.strokeRoundedRect(gx - 5, gy - 11, 10, 22, 2);
+                g.lineStyle(1.0, 0x40ff80, alpha);
+                g.lineBetween(gx + 2, gy - 14, gx - 2, gy - 5);
+                g.lineStyle(1.2, col, alpha);
+
+                if (fillLevel > 0) {
+                    const fillH = 20 * fillLevel;
+                    const fillY = gy + 11 - fillH;
+                    g.fillStyle(0x40ff80, 0.45);
+                    g.fillRoundedRect(gx - 4, fillY, 8, fillH, { tl: 0, tr: 0, bl: 1, br: 1 });
+                }
+                break;
+        }
     }
 
     private showGamblingTip(): void {

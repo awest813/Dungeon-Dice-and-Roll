@@ -23,7 +23,6 @@ const COL_BLACK  = 0x111111;
 const COL_GREEN  = 0x1a7a30;
 const COL_NUM_BG_RED   = 0x6a0a0a;
 const COL_NUM_BG_BLK   = 0x0a0a0a;
-const COL_NUM_BG_SEL   = 0x5a4a00;  // selected/highlighted
 const COL_NUM_BG_WIN   = 0x1a5a10;  // winning number
 
 const CHIP_OPTIONS = [5, 10, 25, 50, 100];
@@ -440,14 +439,34 @@ export class RoulettePanel {
         const draw = (selected: boolean, hover: boolean, winning: boolean): void => {
             gfx.clear();
             const fill = winning ? COL_NUM_BG_WIN
-                : selected ? COL_NUM_BG_SEL
-                : hover    ? bgBase + 0x222222
+                : selected ? 0x3d3000 // rich gold velvet
+                : hover ? bgBase + 0x181818
                 : bgBase;
+            
+            // Draw background felt rectangle
             gfx.fillStyle(fill, 1);
             gfx.fillRect(bx, by, cw, ch);
-            const bc = selected ? COL_TRIM : hover ? 0x448844 : 0x224422;
-            gfx.lineStyle(0.5, bc, selected ? 0.9 : 0.4);
-            gfx.strokeRect(bx, by, cw, ch);
+
+            // Semi-transparent light reflection / gloss highlight at the top
+            gfx.fillStyle(0xffffff, selected ? 0.08 : hover ? 0.05 : 0.02);
+            gfx.fillRect(bx, by, cw, ch / 2);
+
+            // Borders
+            if (winning) {
+                gfx.lineStyle(2, 0x28cc50, 0.95);
+                gfx.strokeRect(bx + 1, by + 1, cw - 2, ch - 2);
+                gfx.lineStyle(0.8, 0xffffff, 0.8);
+                gfx.strokeRect(bx + 2.5, by + 2.5, cw - 5, ch - 5);
+            } else if (selected) {
+                gfx.lineStyle(1.5, COL_TRIM, 0.95);
+                gfx.strokeRect(bx + 1, by + 1, cw - 2, ch - 2);
+                gfx.lineStyle(0.5, 0xffe0a0, 0.6);
+                gfx.strokeRect(bx + 2.5, by + 2.5, cw - 5, ch - 5);
+            } else {
+                const bc = hover ? 0x448844 : 0x18301e;
+                gfx.lineStyle(0.5, bc, hover ? 0.75 : 0.4);
+                gfx.strokeRect(bx, by, cw, ch);
+            }
         };
         draw(false, false, false);
 
@@ -745,29 +764,29 @@ export class RoulettePanel {
             angle:       finalAngle,
             duration:    3200,
             ease:        'Cubic.easeOut',
-            onComplete:  () => this.onSpinComplete(result),
+            onComplete:  () => {}, // Handled by settleBall!
         });
 
         // Animate ball bouncing around outer ring
         this.scene.time.delayedCall(400, () => this.animateBall(result));
     }
 
-    private animateBall(_result: number): void {
+    private animateBall(result: number): void {
         if (this.closed) return;
         // Spin ball in opposite direction, decelerating over the spin duration
         let angle = 0;
         let speed = 28;   // degrees/tick — starts fast
         let tick  = 0;
-        const TOTAL_TICKS = 45;
+        const TOTAL_TICKS = 32;
         const timer = this.scene.time.addEvent({
             delay:    60,
             repeat:   TOTAL_TICKS,
             callback: () => {
                 if (this.closed) { timer.remove(); return; }
-                // Ease-out: speed falls from 28 to 6 over the animation
-                speed = 28 * (1 - tick / TOTAL_TICKS) + 6;
+                // Ease-out: speed falls from 28 to 8 over the animation
+                speed = 28 * (1 - tick / TOTAL_TICKS) + 8;
                 angle += speed;
-                tick++;
+                
                 const r   = WHEEL_OR + 6;
                 const rad = (angle * Math.PI) / 180;
                 this.ballGfx.setPosition(
@@ -775,8 +794,99 @@ export class RoulettePanel {
                     WHEEL_CY + Math.sin(rad) * r,
                 );
                 this.drawBall(this.ballGfx, 0, 0);
+                this.spawnSpark(this.ballGfx.x, this.ballGfx.y);
+
+                if (tick === TOTAL_TICKS) {
+                    this.settleBall(result, () => this.onSpinComplete(result));
+                }
+                tick++;
             },
         });
+    }
+
+    private spawnSpark(x: number, y: number): void {
+        if (this.closed) return;
+        const spark = this.scene.add.graphics();
+        spark.fillStyle(0xffffff, 0.95);
+        spark.fillCircle(0, 0, 3);
+        spark.fillStyle(0xffe0a0, 0.4);
+        spark.fillCircle(0, 0, 6);
+        spark.setPosition(x, y);
+        spark.setDepth(DEPTH_PANEL + 2);
+        this.container.add(spark);
+
+        this.scene.tweens.add({
+            targets: spark,
+            scaleX: 0.1,
+            scaleY: 0.1,
+            alpha: 0,
+            duration: 400,
+            ease: 'Power1',
+            onComplete: () => {
+                if (!this.closed && spark && spark.destroy) {
+                    spark.destroy();
+                }
+            }
+        });
+    }
+
+    private settleBall(result: number, onDone: () => void): void {
+        if (this.closed) return;
+        const winIndex = getWheelIndex(result);
+        const segAngle = (2 * Math.PI) / WHEEL_ORDER.length;
+
+        // Perform a sequence of bounces across segments
+        const bounceSequence = [
+            { offset: -2, radius: WHEEL_IR + 22, duration: 250 },
+            { offset: 1,  radius: WHEEL_IR + 14, duration: 200 },
+            { offset: -1, radius: WHEEL_IR + 8,  duration: 180 },
+            { offset: 0,  radius: WHEEL_IR + 16, duration: 150 },
+        ];
+
+        let index = 0;
+        const runBounce = () => {
+            if (this.closed) return;
+            if (index >= bounceSequence.length) {
+                onDone();
+                return;
+            }
+
+            const step = bounceSequence[index];
+            const targetIdx = (winIndex + step.offset + WHEEL_ORDER.length) % WHEEL_ORDER.length;
+
+            // Animate ball moving to this bounce position with segment locking!
+            this.scene.tweens.add({
+                targets: this.ballGfx,
+                duration: step.duration,
+                ease: 'Back.easeOut', // adds an authentic bounce overshoot
+                onUpdate: () => {
+                    if (this.closed) return;
+                    // Lock angle dynamically to the rotating wheel segment
+                    const currentWheelAngle = (this.wheelContainer.angle * Math.PI) / 180;
+                    const dynamicAngle = -(targetIdx * segAngle) + currentWheelAngle + Math.PI / WHEEL_ORDER.length;
+                    this.ballGfx.setPosition(
+                        WHEEL_CX + Math.cos(dynamicAngle) * step.radius,
+                        WHEEL_CY + Math.sin(dynamicAngle) * step.radius,
+                    );
+                    this.drawBall(this.ballGfx, 0, 0);
+                    this.spawnSpark(this.ballGfx.x, this.ballGfx.y);
+                },
+                onComplete: () => {
+                    if (this.closed) return;
+                    // Small container rumble shake
+                    this.scene.tweens.add({
+                        targets: this.wheelContainer,
+                        y: { from: WHEEL_CY + (Math.random() - 0.5) * 1.5, to: WHEEL_CY },
+                        duration: 80,
+                    });
+                    
+                    index++;
+                    runBounce();
+                }
+            });
+        };
+
+        runBounce();
     }
 
     private onSpinComplete(result: number): void {
@@ -899,14 +1009,33 @@ export class RoulettePanel {
             const by = isZero ? GRID_Y : GRID_Y + (2 - ((num - 1) % 3)) * CELL_H;
 
             gfx.clear();
-            const fill = winning  ? COL_NUM_BG_WIN
-                : selected ? COL_NUM_BG_SEL
+            const fill = winning ? COL_NUM_BG_WIN
+                : selected ? 0x3d3000 // rich gold velvet
                 : bgBase;
+            
+            // Draw background felt rectangle
             gfx.fillStyle(fill, 1);
             gfx.fillRect(bx, by, cw, ch);
-            const bc = selected ? COL_TRIM : winning ? 0x28cc50 : 0x224422;
-            gfx.lineStyle(winning ? 1.5 : 0.5, bc, selected || winning ? 0.9 : 0.4);
-            gfx.strokeRect(bx, by, cw, ch);
+
+            // Semi-transparent gloss highlight at the top
+            gfx.fillStyle(0xffffff, selected ? 0.08 : 0.02);
+            gfx.fillRect(bx, by, cw, ch / 2);
+
+            // Borders
+            if (winning) {
+                gfx.lineStyle(2, 0x28cc50, 0.95);
+                gfx.strokeRect(bx + 1, by + 1, cw - 2, ch - 2);
+                gfx.lineStyle(0.8, 0xffffff, 0.8);
+                gfx.strokeRect(bx + 2.5, by + 2.5, cw - 5, ch - 5);
+            } else if (selected) {
+                gfx.lineStyle(1.5, COL_TRIM, 0.95);
+                gfx.strokeRect(bx + 1, by + 1, cw - 2, ch - 2);
+                gfx.lineStyle(0.5, 0xffe0a0, 0.6);
+                gfx.strokeRect(bx + 2.5, by + 2.5, cw - 5, ch - 5);
+            } else {
+                gfx.lineStyle(0.5, 0x18301e, 0.4);
+                gfx.strokeRect(bx, by, cw, ch);
+            }
         }
 
         // Outside cells

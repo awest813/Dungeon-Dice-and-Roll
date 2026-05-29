@@ -21,6 +21,9 @@ export class PreloadScene extends Phaser.Scene {
     private startBtnGfx!: Phaser.GameObjects.Graphics;
     private startBtnLabel!: Phaser.GameObjects.Text;
     private startBtnHit!: Phaser.GameObjects.Rectangle;
+    private spotlightsGfx!: Phaser.GameObjects.Graphics;
+    private spotlightAngle: number = 0;
+    private titleGlowText!: Phaser.GameObjects.Text;
 
     constructor() { super({ key: 'PreloadScene' }); }
 
@@ -56,13 +59,7 @@ export class PreloadScene extends Phaser.Scene {
         bgGfx.fillStyle(0xc9a84c, 0.02);  // warm gold tint at very centre
         bgGfx.fillCircle(cx, cy, 18);
 
-        // Sweeping spotlights behind the marquee
-        bgGfx.fillStyle(0x40b0ff, 0.05);
-        bgGfx.fillTriangle(cx - 210, GAME_HEIGHT, cx - 36, cy - 170, cx - 88, cy - 170);
-        bgGfx.fillStyle(0xff40a0, 0.04);
-        bgGfx.fillTriangle(cx + 210, GAME_HEIGHT, cx + 36, cy - 170, cx + 88, cy - 170);
-        bgGfx.fillStyle(0xffd040, 0.035);
-        bgGfx.fillTriangle(cx, GAME_HEIGHT, cx - 28, cy - 190, cx + 28, cy - 190);
+
 
         // Diagonal diamond-grid carpet pattern
         bgGfx.lineStyle(0.5, COL_TRIM_DIM, 0.07);
@@ -187,7 +184,7 @@ export class PreloadScene extends Phaser.Scene {
 
         // ── Title — 4-layer neon effect ────────────────────────────────────
         // Layer 0: outer amber glow (bottommost, drawn first)
-        this.add.text(cx, cy - 96, 'SLOT  CITY', {
+        this.titleGlowText = this.add.text(cx, cy - 96, 'SLOT  CITY', {
             fontFamily: FONT, fontSize: '46px', color: '#ffd040', fontStyle: 'bold',
             letterSpacing: 12,
         }).setOrigin(0.5).setAlpha(0.4);
@@ -234,15 +231,15 @@ export class PreloadScene extends Phaser.Scene {
         divGfx.lineBetween(cx, divY + dSize, cx - dSize, divY);
 
         // ── Feature pills ─────────────────────────────────────────────────
-        const features: Array<{ icon: string; label: string; color: number }> = [
-            { icon: '🎰', label: 'SLOTS',     color: COL_SLOTS_ACCENT },
-            { icon: '♠',  label: 'POKER',     color: COL_POKER_ACCENT },
-            { icon: '🃏', label: 'BLACKJACK', color: COL_BLACKJACK_ACCENT },
-            { icon: '🎡', label: 'ROULETTE',  color: COL_ROULETTE_ACCENT },
-            { icon: '🎯', label: 'PLINKO',    color: COL_PLINKO_ACCENT },
-            { icon: '🍹', label: 'BAR',       color: COL_BAR_ACCENT },
-            { icon: '🎱', label: 'BINGO',     color: COL_BINGO_ACCENT },
-            { icon: '🏇', label: 'HORSES',    color: COL_HORSES_ACCENT },
+        const features: Array<{ icon: string; label: string; color: number; desc: string }> = [
+            { icon: '🎰', label: 'SLOTS',     color: COL_SLOTS_ACCENT,     desc: 'Spin the reels and hit the jackpot!' },
+            { icon: '♠',  label: 'POKER',     color: COL_POKER_ACCENT,     desc: 'Showdown against AI poker masters!' },
+            { icon: '🃏', label: 'BLACKJACK', color: COL_BLACKJACK_ACCENT, desc: 'Double down and beat the dealer!' },
+            { icon: '🎡', label: 'ROULETTE',  color: COL_ROULETTE_ACCENT,  desc: 'Place your bets on red or black!' },
+            { icon: '🎯', label: 'PLINKO',    color: COL_PLINKO_ACCENT,    desc: 'Bounce down pegs for high multipliers!' },
+            { icon: '🍹', label: 'BAR',       color: COL_BAR_ACCENT,       desc: 'Order special drinks for session bonuses!' },
+            { icon: '🎱', label: 'BINGO',     color: COL_BINGO_ACCENT,     desc: 'Mark called numbers and achieve line wins!' },
+            { icon: '🏇', label: 'HORSES',    color: COL_HORSES_ACCENT,    desc: 'Cheer your racehorse down the track!' },
         ];
 
         // Compact pill size to fit all feature pills across the screen width
@@ -253,39 +250,81 @@ export class PreloadScene extends Phaser.Scene {
         const pillStartX = cx - pillTotalW / 2;
         const pillY = cy - 16;
 
-        const pillGfx = this.add.graphics();
-        features.forEach((f, i) => {
-            const px = pillStartX + i * (pillW + pillGap);
-            // Background
-            pillGfx.fillStyle(COL_UI_BG3, 1);
-            pillGfx.fillRoundedRect(px, pillY, pillW, pillH, 5);
-            // Diagonal line overlay (subtle texture)
-            pillGfx.lineStyle(0.5, 0xffffff, 0.03);
-            for (let d = 0; d < pillW + pillH; d += 8) {
-                pillGfx.lineBetween(px + d, pillY, px, pillY + d);
-            }
-            // Colored left accent bar with inner glow (6px wide)
-            pillGfx.fillStyle(f.color, 0.75);
-            pillGfx.fillRoundedRect(px, pillY, 6, pillH, { tl: 5, bl: 5, tr: 0, br: 0 });
-            pillGfx.fillStyle(f.color, 0.3);
-            pillGfx.fillRoundedRect(px + 6, pillY, 4, pillH, 0);
-            // Border
-            pillGfx.lineStyle(1, f.color, 0.35);
-            pillGfx.strokeRoundedRect(px, pillY, pillW, pillH, 5);
-            // 1px inner border inset 3px (subtle depth)
-            pillGfx.lineStyle(1, f.color, 0.1);
-            pillGfx.strokeRoundedRect(px + 3, pillY + 3, pillW - 6, pillH - 6, 3);
-            // Top-left corner highlight triangle (6×6 semi-transparent white)
-            pillGfx.fillStyle(0xffffff, 0.05);
-            pillGfx.fillTriangle(px, pillY, px + 6, pillY, px, pillY + 6);
+        // Persistent tooltip text centered below feature pills
+        const tooltipText = this.add.text(cx, pillY + pillH + 12, 'Hover over any game to learn more!', {
+            fontFamily: FONT, fontSize: '10px', color: '#4a6070', fontStyle: 'bold',
+        }).setOrigin(0.5);
 
-            this.add.text(px + pillW / 2 + 2, pillY + 9, f.icon, {
+        features.forEach((f, i) => {
+            const px = pillStartX + i * (pillW + pillGap) + pillW / 2;
+            const py = pillY + pillH / 2;
+
+            const pillContainer = this.add.container(px, py);
+
+            const pGfx = this.add.graphics();
+            const drawPill = (hover: boolean) => {
+                pGfx.clear();
+                pGfx.fillStyle(hover ? 0x091e2a : COL_UI_BG3, 1);
+                pGfx.fillRoundedRect(-pillW / 2, -pillH / 2, pillW, pillH, 5);
+                
+                pGfx.lineStyle(0.5, 0xffffff, hover ? 0.05 : 0.03);
+                for (let d = 0; d < pillW + pillH; d += 8) {
+                    pGfx.lineBetween(-pillW / 2 + d, -pillH / 2, -pillW / 2, -pillH / 2 + d);
+                }
+
+                pGfx.fillStyle(f.color, hover ? 0.95 : 0.75);
+                pGfx.fillRoundedRect(-pillW / 2, -pillH / 2, 6, pillH, { tl: 5, bl: 5, tr: 0, br: 0 });
+                pGfx.fillStyle(f.color, 0.3);
+                pGfx.fillRoundedRect(-pillW / 2 + 6, -pillH / 2, 4, pillH, 0);
+
+                pGfx.lineStyle(1.5, f.color, hover ? 0.8 : 0.35);
+                pGfx.strokeRoundedRect(-pillW / 2, -pillH / 2, pillW, pillH, 5);
+                
+                pGfx.lineStyle(1, f.color, hover ? 0.2 : 0.1);
+                pGfx.strokeRoundedRect(-pillW / 2 + 3, -pillH / 2 + 3, pillW - 6, pillH - 6, 3);
+            };
+            drawPill(false);
+
+            const iconText = this.add.text(0, -pillH / 2 + 9, f.icon, {
                 fontFamily: FONT, fontSize: '15px',
             }).setOrigin(0.5, 0);
 
-            this.add.text(px + pillW / 2 + 2, pillY + 27, f.label, {
+            const labelText = this.add.text(0, -pillH / 2 + 27, f.label, {
                 fontFamily: FONT, fontSize: '8px', color: '#888888', fontStyle: 'bold',
             }).setOrigin(0.5, 0);
+
+            pillContainer.add([pGfx, iconText, labelText]);
+
+            const hitArea = this.add.rectangle(0, 0, pillW, pillH, 0x000000, 0)
+                .setInteractive({ useHandCursor: true });
+
+            hitArea.on('pointerover', () => {
+                drawPill(true);
+                labelText.setColor(Phaser.Display.Color.IntegerToColor(f.color).rgba);
+                tooltipText.setText(f.desc).setColor('#00c8ff');
+                this.tweens.add({
+                    targets: pillContainer,
+                    scaleX: 1.08,
+                    scaleY: 1.08,
+                    duration: 180,
+                    ease: 'Back.easeOut'
+                });
+            });
+
+            hitArea.on('pointerout', () => {
+                drawPill(false);
+                labelText.setColor('#888888');
+                tooltipText.setText('Hover over any game to learn more!').setColor('#4a6070');
+                this.tweens.add({
+                    targets: pillContainer,
+                    scaleX: 1.0,
+                    scaleY: 1.0,
+                    duration: 150,
+                    ease: 'Quad.easeOut'
+                });
+            });
+
+            pillContainer.add(hitArea);
         });
 
         // ── Load Premium Visual Assets ──────────────────────────────────────
@@ -338,6 +377,33 @@ export class PreloadScene extends Phaser.Scene {
     create(): void {
         const cx = GAME_WIDTH  / 2;
         const cy = GAME_HEIGHT / 2;
+
+        // Sweeping spotlights background
+        this.spotlightsGfx = this.add.graphics();
+        this.spotlightAngle = 0;
+        this.drawSpotlights();
+
+        this.tweens.add({
+            targets: this,
+            spotlightAngle: 0.22,
+            duration: 4500,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut',
+            onUpdate: () => {
+                this.drawSpotlights();
+            }
+        });
+
+        // Pulsing Neon Gold Title text
+        this.tweens.add({
+            targets: this.titleGlowText,
+            alpha: { from: 0.22, to: 0.65 },
+            duration: 1600,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut'
+        });
 
         // ── Name entry section ────────────────────────────────────────────
         const inputSectionY = cy + 44;
@@ -497,6 +563,47 @@ export class PreloadScene extends Phaser.Scene {
         }
     }
 
+    private drawSpotlights(): void {
+        const cx = GAME_WIDTH / 2;
+        const g = this.spotlightsGfx;
+        g.clear();
+
+        const angle = this.spotlightAngle;
+
+        // Spotlight 1: Neon Blue (swings left/right)
+        const x1 = cx - 210;
+        const y1 = GAME_HEIGHT;
+        const angle1 = -0.35 + angle;
+        g.fillStyle(0x40b0ff, 0.055);
+        g.fillTriangle(
+            x1, y1,
+            x1 + Math.cos(angle1 - 0.07) * 480, y1 + Math.sin(angle1 - 0.07) * 480,
+            x1 + Math.cos(angle1 + 0.07) * 480, y1 + Math.sin(angle1 + 0.07) * 480
+        );
+
+        // Spotlight 2: Neon Pink (swings opposite)
+        const x2 = cx + 210;
+        const y2 = GAME_HEIGHT;
+        const angle2 = -Math.PI + 0.35 - angle;
+        g.fillStyle(0xff40a0, 0.045);
+        g.fillTriangle(
+            x2, y2,
+            x2 + Math.cos(angle2 - 0.07) * 480, y2 + Math.sin(angle2 - 0.07) * 480,
+            x2 + Math.cos(angle2 + 0.07) * 480, y2 + Math.sin(angle2 + 0.07) * 480
+        );
+
+        // Spotlight 3: Gold (swings center)
+        const x3 = cx;
+        const y3 = GAME_HEIGHT;
+        const angle3 = -Math.PI / 2 + angle * 0.4;
+        g.fillStyle(0xffd040, 0.035);
+        g.fillTriangle(
+            x3, y3,
+            x3 + Math.cos(angle3 - 0.05) * 520, y3 + Math.sin(angle3 - 0.05) * 520,
+            x3 + Math.cos(angle3 + 0.05) * 520, y3 + Math.sin(angle3 + 0.05) * 520
+        );
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private drawInputBorder(focused: boolean): void {
@@ -577,12 +684,51 @@ export class PreloadScene extends Phaser.Scene {
         if (e.key === 'Enter') { this.enterCasino(); return; }
         if (!this.inputActive) return;
 
+        let typed = false;
         if (e.key === 'Backspace') {
             this.nameInput = this.nameInput.slice(0, -1);
+            typed = true;
         } else if (/^[\w\s\-.'!?]$/.test(e.key) && this.nameInput.length < 16) {
             this.nameInput += e.key;
+            typed = true;
+        }
+        
+        if (typed) {
+            this.spawnTypeSparkle();
         }
         this.refreshNameDisplay();
+    }
+
+    private spawnTypeSparkle(): void {
+        const cx = GAME_WIDTH / 2;
+        const cy = GAME_HEIGHT / 2;
+        const inputSectionY = cy + 44;
+        
+        const colors = [0xc9a84c, 0x00c8ff, 0xff40a0, 0x40ff80];
+        const count = 4;
+        
+        for (let i = 0; i < count; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const dist = 20 + Math.random() * 20;
+            const col = colors[Math.floor(Math.random() * colors.length)];
+            
+            const sp = this.add.graphics();
+            sp.fillStyle(col, 0.95);
+            sp.fillCircle(0, 0, 1.5 + Math.random() * 1.5);
+            sp.setPosition(cx + (Math.random() - 0.5) * 120, inputSectionY + 28 + (Math.random() - 0.5) * 10);
+            
+            this.tweens.add({
+                targets: sp,
+                x: sp.x + Math.cos(angle) * dist,
+                y: sp.y + Math.sin(angle) * dist - 15, // float up
+                alpha: 0,
+                scaleX: 0.1,
+                scaleY: 0.1,
+                duration: 500 + Math.random() * 200,
+                ease: 'Quad.easeOut',
+                onComplete: () => sp.destroy()
+            });
+        }
     }
 
     private refreshNameDisplay(): void {

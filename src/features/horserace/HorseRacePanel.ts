@@ -77,6 +77,8 @@ export class HorseRacePanel {
     private selectedHorse:  number  = 0;
     private closed:         boolean = false;
     private raceTimers:     Phaser.Time.TimerEvent[] = [];
+    private particleGfx!: Phaser.GameObjects.Graphics;
+    private particles: Array<{ x: number; y: number; alpha: number; size: number; col: number }> = [];
 
     // Session stats
     private totalRaces  = 0;
@@ -398,9 +400,11 @@ export class HorseRacePanel {
             trackGfx.fillStyle(0x0a2010, 0.4);
             trackGfx.fillRect(tLeft, ly + LANE_H / 2 - 1, TRACK_W, 2);
 
-            // Lane divider
-            trackGfx.lineStyle(0.5, horse.color, 0.15);
+            // Multi-layered golden/cyan lane delimiters
+            trackGfx.lineStyle(0.5, i % 2 === 0 ? 0xffd700 : 0x00ffff, 0.22);
             trackGfx.lineBetween(tLeft, ly + LANE_H - 0.5, tLeft + TRACK_W, ly + LANE_H - 0.5);
+            trackGfx.lineStyle(1.0, i % 2 === 0 ? 0xc9a84c : 0x00c8ff, 0.08);
+            trackGfx.lineBetween(tLeft, ly + LANE_H - 1.5, tLeft + TRACK_W, ly + LANE_H - 1.5);
 
             // Lane number
             trackGfx.fillStyle(horse.color, 0.12);
@@ -411,17 +415,28 @@ export class HorseRacePanel {
         trackGfx.lineStyle(1.5, COL_HORSES_ACCENT, 0.5);
         trackGfx.strokeRect(tLeft, TRACK_TOP, TRACK_W, HORSES.length * LANE_H);
 
-        // Finish line (right edge)
-        trackGfx.lineStyle(2, 0xffffff, 0.7);
-        trackGfx.lineBetween(tLeft + TRACK_W - 2, TRACK_TOP, tLeft + TRACK_W - 2, TRACK_TOP + HORSES.length * LANE_H);
-        trackGfx.fillStyle(0xffffff, 0.6);
-        for (let seg = 0; seg < HORSES.length * LANE_H / 8; seg++) {
-            if (seg % 2 === 0) {
-                trackGfx.fillRect(tLeft + TRACK_W - 6, TRACK_TOP + seg * 8, 4, 8);
-            }
+        // Checkered Finish Line (right edge) with neon side glow
+        trackGfx.lineStyle(3, 0x00ffff, 0.45); // cyan neon backing glow
+        trackGfx.lineBetween(tLeft + TRACK_W - 4, TRACK_TOP, tLeft + TRACK_W - 4, TRACK_TOP + HORSES.length * LANE_H);
+        trackGfx.lineStyle(1.5, 0xffffff, 0.95);
+        trackGfx.lineBetween(tLeft + TRACK_W - 4, TRACK_TOP, tLeft + TRACK_W - 4, TRACK_TOP + HORSES.length * LANE_H);
+        
+        // Checkered columns
+        const checkerSz = 4;
+        for (let cy2 = TRACK_TOP; cy2 < TRACK_TOP + HORSES.length * LANE_H; cy2 += checkerSz * 2) {
+            trackGfx.fillStyle(0xffffff, 0.85);
+            trackGfx.fillRect(tLeft + TRACK_W - 8, cy2, checkerSz, checkerSz);
+            trackGfx.fillRect(tLeft + TRACK_W - 4, cy2 + checkerSz, checkerSz, checkerSz);
+            trackGfx.fillStyle(0x111111, 0.85);
+            trackGfx.fillRect(tLeft + TRACK_W - 4, cy2, checkerSz, checkerSz);
+            trackGfx.fillRect(tLeft + TRACK_W - 8, cy2 + checkerSz, checkerSz, checkerSz);
         }
 
         this.container.add(trackGfx);
+
+        // Particle graphics (placed behind horse sprites)
+        this.particleGfx = this.scene.add.graphics();
+        this.container.add(this.particleGfx);
 
         // Per-horse progress bars (initially empty)
         this.horseSprites = [];
@@ -563,6 +578,9 @@ export class HorseRacePanel {
         this.totalWagered += this.currentBet;
         this.refreshChips();
 
+        this.particles = [];
+        this.particleGfx.clear();
+
         this.raceState = createRace(this.currentBet, this.selectedHorse);
         this.raceBtnHit.disableInteractive();
         this.statusText.setText('🏇  Racing…');
@@ -594,6 +612,13 @@ export class HorseRacePanel {
                 if (this.closed) return;
                 step++;
 
+                // Camera shake near the end (final stretch tension)
+                if (step >= STEPS - 8 && step < STEPS) {
+                    const intensity = 2.0;
+                    this.container.setX(GAME_WIDTH / 2 + (Math.random() - 0.5) * intensity);
+                    this.container.setY(GAME_HEIGHT / 2 + (Math.random() - 0.5) * intensity);
+                }
+
                 this.laneGfxs.forEach((gfx, i) => {
                     const prog = Math.min(stepIncrements[i] * step, resolved.progress[i]);
                     this.drawHorseBar(gfx, HORSES[i], TRACK_TOP + i * LANE_H + 8, LANE_H - 16, prog, false);
@@ -602,8 +627,44 @@ export class HorseRacePanel {
                     const tLeft = TRACK_LEFT + 20;
                     const maxW  = TRACK_W - 22;
                     const barW  = maxW * Math.min(prog, 1);
-                    this.horseSprites[i].setX(tLeft + barW);
+                    const horseX = tLeft + barW;
+                    const horseY = TRACK_TOP + i * LANE_H + LANE_H / 2;
+                    this.horseSprites[i].setX(horseX);
+
+                    // Spawn dust/kick-up particles behind horse
+                    if (step < STEPS && Math.random() < 0.45) {
+                        this.particles.push({
+                            x: horseX - 10,
+                            y: horseY + 4 + (Math.random() - 0.5) * 6,
+                            alpha: 1.0,
+                            size: Phaser.Math.FloatBetween(1.2, 2.8),
+                            col: HORSES[i].color
+                        });
+                    }
                 });
+
+                this.updateAndDrawParticles();
+
+                // Spawn cheering text above leading horse
+                if (step > 4 && step < STEPS - 2 && Math.random() < 0.15) {
+                    let leadIdx = 0;
+                    let maxProg = -1;
+                    HORSES.forEach((_, i) => {
+                        const p = Math.min(stepIncrements[i] * step, resolved.progress[i]);
+                        if (p > maxProg) {
+                            maxProg = p;
+                            leadIdx = i;
+                        }
+                    });
+
+                    const p = Math.min(stepIncrements[leadIdx] * step, resolved.progress[leadIdx]);
+                    const lx = TRACK_LEFT + 20 + (TRACK_W - 22) * Math.min(p, 1);
+                    const ly = TRACK_TOP + leadIdx * LANE_H + 4;
+                    
+                    const cheerPhrases = ["GO! 📣", "CLAP! 👏", "⚡ FAST!", "🏇 RUN!", "🌟 LEAD!"];
+                    const phrase = cheerPhrases[Math.floor(Math.random() * cheerPhrases.length)];
+                    this.spawnCheerText(lx, ly, phrase);
+                }
 
                 if (step >= STEPS) {
                     this.finishRace(resolved);
@@ -615,6 +676,7 @@ export class HorseRacePanel {
 
     private finishRace(resolved: RaceState): void {
         if (this.closed) return;
+        this.container.setPosition(GAME_WIDTH / 2, GAME_HEIGHT / 2);
         this.raceState = resolved;
 
         const delta  = chipDelta(resolved);
@@ -684,6 +746,40 @@ export class HorseRacePanel {
 
     private refreshChips(): void {
         this.chipsText.setText(`◈ ${GameState.get().chips.toLocaleString()}`);
+    }
+
+    private updateAndDrawParticles(): void {
+        const pg = this.particleGfx;
+        pg.clear();
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            const p = this.particles[i];
+            p.alpha -= 0.055; // fade out fast
+            p.x -= Phaser.Math.FloatBetween(0.5, 2.0); // drift back
+            p.y += Phaser.Math.FloatBetween(-0.4, 0.4); // dust drift
+            
+            if (p.alpha <= 0) {
+                this.particles.splice(i, 1);
+                continue;
+            }
+            
+            pg.fillStyle(p.col, p.alpha);
+            pg.fillCircle(p.x, p.y, p.size);
+        }
+    }
+
+    private spawnCheerText(x: number, y: number, text: string): void {
+        const txt = this.scene.add.text(x, y, text, {
+            fontFamily: FONT, fontSize: '9px', color: '#ffd700', fontStyle: 'bold'
+        }).setOrigin(0.5).setScrollFactor(0).setDepth(DEPTH_PANEL + 5);
+        this.container.add(txt);
+        this.scene.tweens.add({
+            targets: txt,
+            y: y - 26,
+            alpha: 0,
+            duration: 800,
+            ease: 'Quad.easeOut',
+            onComplete: () => txt.destroy()
+        });
     }
 
     // ── Close ─────────────────────────────────────────────────────────────────
