@@ -576,6 +576,8 @@ export class HorseRacePanel {
         // Deduct bet
         GameState.addChips(-this.currentBet);
         this.totalWagered += this.currentBet;
+        GameState.recordStat('horseRacesBet', 1);
+        GameState.recordStat('horseWagered', this.currentBet);
         this.refreshChips();
 
         this.particles = [];
@@ -630,6 +632,13 @@ export class HorseRacePanel {
                     const horseX = tLeft + barW;
                     const horseY = TRACK_TOP + i * LANE_H + LANE_H / 2;
                     this.horseSprites[i].setX(horseX);
+
+                    // Gallop bobbing and rotation tilt
+                    const timeSeed = this.scene.time.now * 0.03 + i * 2.5;
+                    const bobY = Math.sin(timeSeed) * 2;
+                    const tilt = Math.cos(timeSeed) * 0.08;
+                    this.horseSprites[i].setY(horseY + bobY);
+                    this.horseSprites[i].setRotation(tilt);
 
                     // Spawn dust/kick-up particles behind horse
                     if (step < STEPS && Math.random() < 0.45) {
@@ -687,19 +696,43 @@ export class HorseRacePanel {
             this.drawHorseBar(gfx, HORSES[i], TRACK_TOP + i * LANE_H + 8, LANE_H - 16,
                 resolved.progress[i], i === resolved.winnerId);
             
-            // Set final horse text position
+            // Set final horse text position and reset Y / rotation
             const tLeft = TRACK_LEFT + 20;
             const maxW  = TRACK_W - 22;
             const barW  = maxW * Math.min(resolved.progress[i], 1);
             this.horseSprites[i].setX(tLeft + barW);
+            this.horseSprites[i].setY(TRACK_TOP + i * LANE_H + LANE_H / 2);
+            this.horseSprites[i].setRotation(0);
         });
 
         // Highlight winner row
         this.highlightWinnerLane(resolved.winnerId!);
 
+        // Celebratory winner bounce tween
+        const winHorse = this.horseSprites[resolved.winnerId!];
+        this.scene.tweens.add({
+            targets: winHorse,
+            scaleX: 1.45,
+            scaleY: 1.45,
+            yoyo: true,
+            repeat: 3,
+            duration: 180,
+            ease: 'Quad.easeInOut',
+            onComplete: () => {
+                if (!this.closed && winHorse) {
+                    winHorse.setScale(1.0);
+                }
+            }
+        });
+
         const won = delta > 0;
         GameState.addChips(won ? delta : 0);
-        if (won) this.totalWon += delta;
+        if (won) {
+            this.totalWon += delta;
+            GameState.recordStat('horseRacesWon', 1);
+            GameState.recordStat('horseWon', delta);
+            GameState.recordMaxStat('horseMaxPayout', delta);
+        }
         this.totalRaces++;
         this.refreshChips();
         this.refreshStats();

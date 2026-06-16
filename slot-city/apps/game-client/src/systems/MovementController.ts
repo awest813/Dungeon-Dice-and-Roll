@@ -41,8 +41,10 @@ export class MovementController {
     };
 
     // Click to move
-    this.scene.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+    this.scene.input.on("pointerdown", (pointer: Phaser.Input.Pointer, currentlyOver: any[]) => {
       if (this.isSeated) return;
+      // Ignore movement clicks that fall on interactive UI elements or buttons
+      if (currentlyOver && currentlyOver.length > 0) return;
       const iso = screenToIso(pointer.worldX, pointer.worldY);
       this.sendMove(iso.tileX, iso.tileY, PlayerDirection.SOUTH);
     });

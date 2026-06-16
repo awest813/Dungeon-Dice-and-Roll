@@ -4,6 +4,7 @@ import {
     COL_TRIM, DEPTH_AVATAR_BASE, DEPTH_SHADOW,
     COL_NEON_BLUE, COL_NEON_PINK,
 } from '../../game/constants';
+import { GameState } from '../state/GameState';
 
 interface Blocker {
     x: number; y: number; w: number; h: number;
@@ -20,6 +21,7 @@ export class AvatarController {
     private shadow!: Phaser.GameObjects.Ellipse;
     private nameTag!: Phaser.GameObjects.Text;
     private blockers: Blocker[] = [];
+    private emoteBubble: Phaser.GameObjects.Container | null = null;
 
     private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
     private wasd!: { up: Phaser.Input.Keyboard.Key; down: Phaser.Input.Keyboard.Key; left: Phaser.Input.Keyboard.Key; right: Phaser.Input.Keyboard.Key };
@@ -28,6 +30,8 @@ export class AvatarController {
     y: number;
     facing: FacingDir = 'down';
     isMoving: boolean = false;
+    enabled: boolean = true;
+    private targetPos: { x: number, y: number } | null = null;
 
     private trailTimer = 0;
 
@@ -61,7 +65,8 @@ export class AvatarController {
             .setBlendMode(Phaser.BlendModes.ADD);
 
         // Main Chibi Character Sprite overlay
-        this.sprite = this.scene.add.image(this.x, this.y, 'avatar_player');
+        const tex = GameState.get().avatarTextureKey || 'avatar_player';
+        this.sprite = this.scene.add.image(this.x, this.y, tex);
         this.sprite.setOrigin(0.5, 0.72); // center on feet pivot
         this.sprite.setDisplaySize(30, 44);
         this.sprite.setDepth(DEPTH_AVATAR_BASE);
@@ -77,6 +82,10 @@ export class AvatarController {
 
     addBlocker(b: Blocker): void {
         this.blockers.push(b);
+    }
+
+    setBlockers(blockers: Blocker[]): void {
+        this.blockers = [...blockers];
     }
 
     private resolveBlockers(nx: number, ny: number): { x: number; y: number } {
@@ -107,7 +116,18 @@ export class AvatarController {
         return { x: rx, y: ry };
     }
 
+    setTarget(x: number, y: number): void {
+        this.targetPos = { x, y };
+    }
+
     update(delta: number): void {
+        if (!this.enabled) {
+            this.isMoving = false;
+            this.walkTime = 0;
+            this.syncSprite();
+            return;
+        }
+
         const dt = delta / 1000;
         let vx = 0;
         let vy = 0;
@@ -117,10 +137,32 @@ export class AvatarController {
         const up    = this.cursors.up.isDown    || this.wasd.up.isDown;
         const down  = this.cursors.down.isDown  || this.wasd.down.isDown;
 
-        if (left)  { vx -= 1; this.facing = 'left';  }
-        if (right) { vx += 1; this.facing = 'right'; }
-        if (up)    { vy -= 1; this.facing = 'up';    }
-        if (down)  { vy += 1; this.facing = 'down';  }
+        // Cancel click-to-move if keyboard is used
+        if (left || right || up || down) {
+            this.targetPos = null;
+        }
+
+        if (this.targetPos) {
+            const dx = this.targetPos.x - this.x;
+            const dy = this.targetPos.y - this.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 4) {
+                this.targetPos = null;
+            } else {
+                vx = dx / dist;
+                vy = dy / dist;
+                if (Math.abs(vx) > Math.abs(vy)) {
+                    this.facing = vx > 0 ? 'right' : 'left';
+                } else {
+                    this.facing = vy > 0 ? 'down' : 'up';
+                }
+            }
+        } else {
+            if (left)  { vx -= 1; this.facing = 'left';  }
+            if (right) { vx += 1; this.facing = 'right'; }
+            if (up)    { vy -= 1; this.facing = 'up';    }
+            if (down)  { vy += 1; this.facing = 'down';  }
+        }
 
         this.isMoving = vx !== 0 || vy !== 0;
 
@@ -130,9 +172,15 @@ export class AvatarController {
             vx = (vx / mag) * AVATAR_SPEED * dt;
             vy = (vy / mag) * AVATAR_SPEED * dt;
 
+            const oldX = this.x;
+            const oldY = this.y;
             const resolved = this.resolveBlockers(this.x + vx, this.y + vy);
             this.x = resolved.x;
             this.y = resolved.y;
+
+            if (this.targetPos && Math.abs(this.x - oldX) < 0.1 && Math.abs(this.y - oldY) < 0.1) {
+                this.targetPos = null;
+            }
 
             // Footstep trail
             this.trailTimer += delta;
@@ -154,6 +202,11 @@ export class AvatarController {
     }
 
     private syncSprite(): void {
+        const tex = GameState.get().avatarTextureKey || 'avatar_player';
+        if (this.sprite.texture.key !== tex) {
+            this.sprite.setTexture(tex);
+        }
+
         const r = AVATAR_SIZE;
 
         this.shadow.setPosition(this.x, this.y + r - 2);
@@ -176,6 +229,11 @@ export class AvatarController {
         this.sprite.setPosition(this.x, this.y + bobY);
         this.nameTag.setPosition(this.x, this.y - r * 2.4 + bobY);
 
+        // Update active emote bubble positioning & depth dynamically
+        if (this.emoteBubble && this.emoteBubble.active) {
+            this.emoteBubble.setPosition(this.x, this.y - r * 2.2 + bobY);
+        }
+
         // Depth sort: higher y = higher depth
         const depth = DEPTH_AVATAR_BASE + this.y * 0.1;
         this.pinkFloorGlow.setDepth(depth - 6);
@@ -183,6 +241,10 @@ export class AvatarController {
         this.sprite.setDepth(depth);
         this.nameTag.setDepth(depth + 4);
         this.shadow.setDepth(depth - 5);
+
+        if (this.emoteBubble && this.emoteBubble.active) {
+            this.emoteBubble.setDepth(depth + 10);
+        }
     }
 
     destroy(): void {
@@ -191,6 +253,64 @@ export class AvatarController {
         this.aura.destroy();
         this.sprite.destroy();
         this.nameTag.destroy();
+        if (this.emoteBubble) {
+            this.emoteBubble.destroy();
+            this.emoteBubble = null;
+        }
+    }
+
+    playEmote(emoji: string): void {
+        if (this.emoteBubble) {
+            this.emoteBubble.destroy();
+        }
+
+        const r = AVATAR_SIZE;
+        const bx = this.x;
+        const by = this.y - r * 2.2;
+
+        // Visual speech bubble graphics
+        const bubbleGfx = this.scene.add.graphics();
+        const bw = 36;
+        const bh = 36;
+        const br = 8;
+        bubbleGfx.fillStyle(0xffffff, 0.95);
+        bubbleGfx.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, br);
+        // Draw downward indicator triangle
+        bubbleGfx.fillTriangle(0, bh / 2 + 5, -5, bh / 2 - 2, 5, bh / 2 - 2);
+        bubbleGfx.lineStyle(1.5, COL_TRIM, 0.85);
+        bubbleGfx.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, br);
+
+        const text = this.scene.add.text(0, -1, emoji, {
+            fontSize: '20px',
+        }).setOrigin(0.5);
+
+        this.emoteBubble = this.scene.add.container(bx, by, [bubbleGfx, text]);
+        this.emoteBubble.setScale(0);
+
+        // Animate pop-up
+        this.scene.tweens.add({
+            targets: this.emoteBubble,
+            scaleX: 1, scaleY: 1,
+            y: by - 12,
+            duration: 250,
+            ease: 'Back.easeOut',
+            onComplete: () => {
+                // Fade out and float away after a short delay
+                this.scene.tweens.add({
+                    targets: this.emoteBubble,
+                    alpha: 0,
+                    y: by - 26,
+                    delay: 1300,
+                    duration: 350,
+                    onComplete: () => {
+                        if (this.emoteBubble) {
+                            this.emoteBubble.destroy();
+                            this.emoteBubble = null;
+                        }
+                    }
+                });
+            }
+        });
     }
 
     private emitTrailParticle(): void {

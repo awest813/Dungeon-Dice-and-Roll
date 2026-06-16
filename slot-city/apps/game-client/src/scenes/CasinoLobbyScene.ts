@@ -110,7 +110,7 @@ export class CasinoLobbyScene extends Phaser.Scene {
     }).setScrollFactor(0).setDepth(1000);
 
     // Help hint at bottom
-    this.add.text(width / 2, this.scale.height - 12, "WASD / Arrows: move  |  F: interact  |  Click portals to enter rooms", {
+    this.add.text(this.scale.width / 2, this.scale.height - 12, "WASD / Arrows: move  |  F: interact  |  Click portals to enter rooms", {
       fontSize: "9px",
       color: "#334455",
       fontFamily: "monospace",

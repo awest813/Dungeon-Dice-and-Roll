@@ -68,6 +68,8 @@ export class RoulettePanel {
     private spinBtnGfx!:    Phaser.GameObjects.Graphics;
     private spinBtnLabel!:  Phaser.GameObjects.Text;
     private clearBtnGfx!:   Phaser.GameObjects.Graphics;
+    private winningHighlightGfx!: Phaser.GameObjects.Graphics;
+    private winningPulseTimer: Phaser.Tweens.Tween | null = null;
 
     // Number cell refs for highlighting
     private numCells: Map<number, {
@@ -145,6 +147,10 @@ export class RoulettePanel {
         this.buildClearButton();
         this.buildStatusRow();
         this.buildHistoryRow();
+
+        this.winningHighlightGfx = this.scene.add.graphics();
+        this.winningHighlightGfx.setVisible(false);
+        this.container.add(this.winningHighlightGfx);
 
         // Keyboard
         this.escKey   = this.scene.input.keyboard!.addKey('ESC');
@@ -924,6 +930,15 @@ export class RoulettePanel {
 
         // totalReturn = stake returned + net profit (always >= 0)
         const totalReturn = wagered + net;
+
+        // Record global stats
+        GameState.recordStat('rouletteSpins', 1);
+        GameState.recordStat('rouletteWagered', wagered);
+        GameState.recordStat('rouletteWon', totalReturn);
+        if (totalReturn > 0) {
+            GameState.recordMaxStat('rouletteMaxWin', totalReturn);
+        }
+
         if (totalReturn > 0) {
             GameState.addChips(totalReturn);
         }
@@ -1059,16 +1074,44 @@ export class RoulettePanel {
             }
         }
 
-        // Pulse winning number cell
+        // Pulsing Neon Win Highlight
         if (showResult && result !== null) {
-            const cell = this.numCells.get(result);
-            if (cell) {
-                this.scene.tweens.add({
-                    targets: [cell.gfx, cell.lbl],
-                    alpha: 0.3, yoyo: true, repeat: 4, duration: 130,
-                    onComplete: () => { if (!this.closed) { cell.gfx.setAlpha(1); cell.lbl.setAlpha(1); } },
-                });
+            const num = result;
+            const isZero = num === 0;
+            const cw = isZero ? ZERO_W : CELL_W;
+            const ch = isZero ? CELL_H * 3 : CELL_H;
+            const bx = isZero ? GRID_X : GRID_X + ZERO_W + (Math.ceil(num / 3) - 1) * CELL_W;
+            const by = isZero ? GRID_Y : GRID_Y + (2 - ((num - 1) % 3)) * CELL_H;
+
+            this.winningHighlightGfx.clear();
+            // Outer golden neon glow
+            this.winningHighlightGfx.lineStyle(2.5, 0xffd700, 1.0);
+            this.winningHighlightGfx.strokeRect(bx + 1, by + 1, cw - 2, ch - 2);
+            // Inner gloss line
+            this.winningHighlightGfx.lineStyle(1.0, 0xffffff, 0.85);
+            this.winningHighlightGfx.strokeRect(bx + 2.5, by + 2.5, cw - 5, ch - 5);
+
+            this.winningHighlightGfx.setVisible(true);
+            this.winningHighlightGfx.setAlpha(1.0);
+
+            if (this.winningPulseTimer) {
+                this.winningPulseTimer.stop();
+                this.winningPulseTimer = null;
             }
+
+            this.winningPulseTimer = this.scene.tweens.add({
+                targets: this.winningHighlightGfx,
+                alpha: 0.35,
+                yoyo: true,
+                repeat: -1,
+                duration: 350
+            });
+        } else {
+            if (this.winningPulseTimer) {
+                this.winningPulseTimer.stop();
+                this.winningPulseTimer = null;
+            }
+            this.winningHighlightGfx.setVisible(false);
         }
     }
 
@@ -1114,6 +1157,7 @@ export class RoulettePanel {
         if (refund > 0) GameState.addChips(refund);
 
         this.spinTween?.stop();
+        this.winningPulseTimer?.stop();
         this.escKey.destroy();
         this.spaceKey.destroy();
         this.overlay.destroy();

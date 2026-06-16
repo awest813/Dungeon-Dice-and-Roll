@@ -44,7 +44,7 @@ export function verifyToken(token: string): { userId: string } {
 // POST /auth/register
 authRouter.post("/register", authLimiter, async (req: Request, res: Response) => {
   try {
-    const { username, password } = req.body as { username: string; password: string };
+    const { username, password, outfitId } = req.body as { username: string; password: string; outfitId?: string };
 
     if (!username || !password) {
       res.status(400).json({ error: "Username and password are required" });
@@ -71,8 +71,8 @@ authRouter.post("/register", authLimiter, async (req: Request, res: Response) =>
 
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await prisma.user.create({
-      data: { username, passwordHash, chips: STARTING_CHIPS },
-      select: { id: true, username: true, chips: true, createdAt: true },
+      data: { username, passwordHash, chips: STARTING_CHIPS, outfitId: outfitId || "default" },
+      select: { id: true, username: true, chips: true, outfitId: true, createdAt: true },
     });
 
     // Create leaderboard entry
@@ -100,7 +100,7 @@ authRouter.post("/login", authLimiter, async (req: Request, res: Response) => {
 
     const user = await prisma.user.findUnique({
       where: { username },
-      select: { id: true, username: true, chips: true, passwordHash: true, createdAt: true },
+      select: { id: true, username: true, chips: true, outfitId: true, passwordHash: true, createdAt: true },
     });
 
     if (!user) {

@@ -11,24 +11,13 @@ import {
 } from '../../game/constants';
 import { ToastManager } from '../ui/ToastManager';
 
+import { RiskLevel, RISK_MULTIPLIERS, SLOT_COUNT, BOARD_ROWS, BET_OPTIONS, simulateDrop, DropResult } from './PlinkoEngine';
+
 // ── Plinko board configuration ────────────────────────────────────────────────
-const BOARD_ROWS    = 8;    // number of peg rows
 const BOARD_W       = 380;
 const BOARD_H       = 240;
 const PEG_RADIUS    = 4;
 const BALL_RADIUS   = 7;
-
-// ── Risk levels ───────────────────────────────────────────────────────────────
-type RiskLevel = 'low' | 'medium' | 'high';
-
-const RISK_MULTIPLIERS: Record<RiskLevel, number[]> = {
-    low:    [0.4, 0.5, 0.7, 1.0, 1.5, 3.0, 1.5, 1.0, 0.7, 0.5, 0.4],
-    medium: [0.2, 0.5, 1.0, 2.0, 5.0, 10,  5.0, 2.0, 1.0, 0.5, 0.2],
-    high:   [0,   0,   0.2, 0.5, 2.0, 50,  2.0, 0.5, 0.2, 0,   0  ],
-};
-
-// SLOT_COUNT is constant regardless of risk level
-const SLOT_COUNT = RISK_MULTIPLIERS.medium.length;
 
 // Colors for slots based on multiplier value
 function slotColor(mult: number): number {
@@ -40,7 +29,6 @@ function slotColor(mult: number): number {
     return 0x1a1a1a;  // 0× = near-black
 }
 
-const BET_OPTIONS = [10, 25, 50, 100];
 type DropState = 'idle' | 'dropping' | 'result';
 
 // Peg grid position
@@ -66,7 +54,7 @@ export class PlinkoPanel {
     private betBtns: Array<{ gfx: Phaser.GameObjects.Graphics; label: Phaser.GameObjects.Text; amount: number }> = [];
     private slotHighlightGfx!: Phaser.GameObjects.Graphics;
     private particleGfx!:  Phaser.GameObjects.Graphics;
-    private particles: Array<{ x: number; y: number; alpha: number; size: number; col: number }> = [];
+    private particles: Array<{ x: number; y: number; alpha: number; size: number; col: number; vx?: number; vy?: number }> = [];
     private escKey!:  Phaser.Input.Keyboard.Key;
     private spaceKey!: Phaser.Input.Keyboard.Key;
 
@@ -90,7 +78,9 @@ export class PlinkoPanel {
     private ballPath:    Array<{ x: number; y: number }> = [];
     private pathIdx      = 0;
     private finalSlotIdx = 0;
+    private currentDropResult?: DropResult;
     private dropTween: Phaser.Tweens.Tween | null = null;
+    private victoryTween: Phaser.Tweens.Tween | null = null;
 
     // Session stats
     private totalDrops   = 0;
@@ -540,6 +530,8 @@ export class PlinkoPanel {
         GameState.addChips(-this.currentBet);
         this.totalDrops++;
         this.totalWagered += this.currentBet;
+        GameState.recordStat('plinkoDrops', 1);
+        GameState.recordStat('plinkoWagered', this.currentBet);
         this.updateChipsDisplay();
 
         this.dropState = 'dropping';
@@ -551,10 +543,12 @@ export class PlinkoPanel {
         this.particleGfx.clear();
 
         // ── Compute ball path through the peg grid ────────────────────────────
-        const { points, finalSlot } = this.computeBallPath();
+        const result = simulateDrop(this.currentBet, this.riskLevel);
+        const { points, finalSlot } = this.computeBallPath(result.path);
         this.ballPath    = points;
         this.finalSlotIdx = finalSlot;
         this.pathIdx     = 0;
+        this.currentDropResult = result;
 
         // Start ball at the top center
         this.ballX = this.boardOffsetX;
@@ -566,11 +560,9 @@ export class PlinkoPanel {
     }
 
     /**
-     * Simulate the ball dropping through the peg grid.
-     * At each peg row the ball randomly goes left or right.
-     * Returns waypoints from top to a slot plus the landing slot index.
+     * Build the physical waypoints from the engine's simulated path.
      */
-    private computeBallPath(): { points: Array<{ x: number; y: number }>; finalSlot: number } {
+    private computeBallPath(simPath: number[]): { points: Array<{ x: number; y: number }>; finalSlot: number } {
         const points: Array<{ x: number; y: number }> = [];
         const ox = this.boardOffsetX;
         const oy = this.boardOffsetY;
@@ -582,14 +574,8 @@ export class PlinkoPanel {
         points.push({ x: ox, y: oy - 10 });
         points.push({ x: ox, y: oy + 8 });   // just inside board top
 
-        // Track which column the ball is in (float position in slot units)
-        // Start at the center column
-        let colPos = (SLOT_COUNT - 1) / 2;   // 5.0 for 11 slots (center)
-
         for (let row = 0; row < BOARD_ROWS; row++) {
-            // Ball hits a peg and deflects left (-0.5) or right (+0.5)
-            const deflect = Math.random() < 0.5 ? -0.5 : 0.5;
-            colPos = Phaser.Math.Clamp(colPos + deflect, 0, SLOT_COUNT - 1);
+            const colPos = simPath[row + 1]; // +1 because index 0 is initial start
 
             const py = oy + 18 + row * (pegAreaH / BOARD_ROWS);
             const px = ox - BOARD_W / 2 + (colPos + 0.5) * spacing;
@@ -601,7 +587,7 @@ export class PlinkoPanel {
         }
 
         // Final slot landing
-        const finalSlot = Math.round(colPos);
+        const finalSlot = Math.round(simPath[simPath.length - 1]);
         const clampedSlot = Phaser.Math.Clamp(finalSlot, 0, SLOT_COUNT - 1);
         const finalX = ox - BOARD_W / 2 + (clampedSlot + 0.5) * spacing;
         const finalY = oy + BOARD_H - slotH / 2;
@@ -670,9 +656,47 @@ export class PlinkoPanel {
         if (this.closed) return;
 
         const mults  = this.getMultipliers();
-        const mult   = mults[slotIdx];
-        const payout = Math.round(this.currentBet * mult);
         const col    = slotColor(mults[slotIdx]);
+
+        // Spawn victory confetti fountain!
+        for (let i = 0; i < 40; i++) {
+            const angle = -Math.PI / 2 + (Math.random() - 0.5) * (Math.PI / 2.5); // upward fan arc
+            const speed = Phaser.Math.FloatBetween(2.5, 7.5);
+            this.particles.push({
+                x: this.ballX,
+                y: this.ballY - 5,
+                alpha: 1.0,
+                size: Phaser.Math.FloatBetween(2.0, 4.5),
+                col: col,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed
+            });
+        }
+
+        // Animate landing particles physics over 1.2 seconds
+        if (this.victoryTween) {
+            this.victoryTween.stop();
+            this.victoryTween = null;
+        }
+
+        this.victoryTween = this.scene.tweens.add({
+            targets: { val: 0 },
+            val: 1,
+            duration: 1200,
+            onUpdate: () => {
+                if (!this.closed) this.updateAndDrawParticles();
+            },
+            onComplete: () => {
+                if (!this.closed) {
+                    this.particles = [];
+                    this.particleGfx.clear();
+                    this.victoryTween = null;
+                }
+            }
+        });
+
+        const mult   = this.currentDropResult ? this.currentDropResult.multiplier : mults[slotIdx];
+        const payout = this.currentDropResult ? this.currentDropResult.payout : Math.round(this.currentBet * mult);
 
         // Highlight the winning slot
         this.highlightSlot(slotIdx);
@@ -690,6 +714,8 @@ export class PlinkoPanel {
         const net = payout - this.currentBet;
         this.totalWon += payout;   // gross return tracked for stats (net = totalWon - totalWagered)
         GameState.addChips(payout);
+        GameState.recordStat('plinkoWon', payout);
+        GameState.recordMaxStat('plinkoMaxWin', payout);
         this.updateChipsDisplay();
         if (net > 0) {
             this.showChipDelta(`+${net}◈`, '#2ecc71');
@@ -833,8 +859,18 @@ export class PlinkoPanel {
         
         for (let i = this.particles.length - 1; i >= 0; i--) {
             const p = this.particles[i];
-            p.alpha -= 0.045; // fade out
-            p.y += 0.4;      // gravity drift
+            
+            // Slower fade for victory particles
+            p.alpha -= (p.vx !== undefined) ? 0.028 : 0.045;
+            
+            // Physics movement
+            if (p.vx !== undefined) {
+                p.x += p.vx;
+                p.vy = (p.vy ?? 0) + 0.18; // Apply gravity to upward particles
+                p.y += p.vy;
+            } else {
+                p.y += 0.4; // Default gravity drift
+            }
             
             if (p.alpha <= 0) {
                 this.particles.splice(i, 1);
@@ -964,6 +1000,7 @@ export class PlinkoPanel {
         if (this.closed) return;
         this.closed = true;
         if (this.dropTween) { this.dropTween.stop(); this.dropTween = null; }
+        if (this.victoryTween) { this.victoryTween.stop(); this.victoryTween = null; }
         this.escKey.destroy();
         this.spaceKey.destroy();
         this.overlay.destroy();

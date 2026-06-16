@@ -130,3 +130,5 @@ export const ZONE_ROULETTE   = { x:  30, y: 450, w: 270, h: 130 };
 export const ZONE_PLINKO     = { x: 650, y: 450, w: 280, h: 130 };
 export const ZONE_BINGO      = { x: 320, y: 452, w: 310, h: 118 };
 export const ZONE_HORSES     = { x: 650, y: 590, w: 280, h:  98 };
+export const ZONE_VIP        = { x:  24, y: 580, w: 256, h: 116 };
+

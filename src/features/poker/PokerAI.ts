@@ -159,3 +159,29 @@ export function getAIDecision(
     if (canCheck) return { action: 'check' };
     return { action: 'fold' };
 }
+
+// ── AI Tells ──────────────────────────────────────────────────────────────────
+
+export function evalTell(
+    state: PokerGameState,
+    playerIdx: number,
+    _personality: AIPersonality = DEFAULT_PERSONALITY,
+    hasTellBuff: boolean = false
+): string | null {
+    const player = state.players[playerIdx];
+    const { phase, community } = state;
+    if (player.folded) return null;
+
+    const rawStrength = phase === 'preflop'
+        ? preflopStrength(player)
+        : postflopStrength(player, community);
+
+    // If buff is active, show tell 80% of time. If not, 15% of time.
+    const showChance = hasTellBuff ? 0.8 : 0.15;
+    if (Math.random() > showChance) return null;
+
+    if (rawStrength >= 0.85) return '😏'; // Confident
+    if (rawStrength >= 0.60) return '🤔'; // Thoughtful
+    if (rawStrength <= 0.35) return '😰'; // Nervous
+    return '😐'; // Poker face
+}

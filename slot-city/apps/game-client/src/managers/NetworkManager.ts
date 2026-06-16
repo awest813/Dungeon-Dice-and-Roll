@@ -33,14 +33,14 @@ class NetworkManager {
   // ─── Guest / Offline Mode ─────────────────────────────────────────────────
 
   /** Enter solo mode: sets a local user without hitting the server. */
-  setGuestUser(username: string): void {
+  setGuestUser(username: string, outfitId: string = "default"): void {
     const saved = localStore.load();
     localStore.setUsername(username);
     this.user = {
       id: "local_player",
       username,
       chips: saved.chips,
-      outfitId: "default",
+      outfitId,
     };
     this.guestMode = true;
   }
@@ -70,11 +70,11 @@ class NetworkManager {
     return !!this.token || this.guestMode;
   }
 
-  async register(username: string, password: string): Promise<AuthResult> {
+  async register(username: string, password: string, outfitId: string = "default"): Promise<AuthResult> {
     const response = await fetch(`${API_URL}/auth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, outfitId }),
     });
     const data = await response.json();
     if (!response.ok) {

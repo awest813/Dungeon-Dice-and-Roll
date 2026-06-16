@@ -75,6 +75,9 @@ export class BlackjackPanel {
     // Dealer animation — controls step-by-step card reveal
     private dealerRevealCount: number = Infinity;  // Infinity = show all (normal)
     private dealerAnimTimers:  Phaser.Time.TimerEvent[] = [];
+    private prevPlayerCards = 0;
+    private prevDealerCards = 0;
+    private prevSplitCards = 0;
 
     constructor(scene: Phaser.Scene, onClose: () => void) {
         this.scene   = scene;
@@ -397,6 +400,7 @@ export class BlackjackPanel {
             return;
         }
         GameState.addChips(-this.bjState.bet);
+        GameState.recordStat('bjDoubleDowns', 1);
         this.bjState = doubleDown(this.bjState);
         // If player busted on double, no dealer animation needed
         if (this.bjState.result === 'bust') {
@@ -418,6 +422,7 @@ export class BlackjackPanel {
         }
         GameState.addChips(-this.bjState.bet);   // deduct split bet
         this.splitDeducted = true;
+        GameState.recordStat('bjSplits', 1);
         this.bjState = split(this.bjState);
         this.showPhaseUI();
         this.refreshDisplay();
@@ -463,6 +468,39 @@ export class BlackjackPanel {
             + (this.bjState.splitHand !== null ? this.bjState.splitBet : 0)
             + this.bjState.insuranceBet;
         const net = delta - totalDeducted;
+
+        // Record global stats
+        const hasSplit = this.bjState.splitHand !== null;
+        const handsCount = hasSplit ? 2 : 1;
+        GameState.recordStat('bjHandsPlayed', handsCount);
+        GameState.recordStat('bjWagered', totalDeducted);
+        GameState.recordStat('bjWon', delta);
+
+        // Evaluate main hand result
+        const mainRes = this.bjState.result;
+        if (mainRes === 'win' || mainRes === 'blackjack') {
+            GameState.recordStat('bjHandsWon', 1);
+            if (mainRes === 'blackjack') {
+                GameState.recordStat('bjBlackjacks', 1);
+            }
+        } else if (mainRes === 'push') {
+            GameState.recordStat('bjHandsTied', 1);
+        } else if (mainRes === 'lose' || mainRes === 'bust') {
+            GameState.recordStat('bjHandsLosses', 1);
+        }
+
+        // Evaluate split hand result if active
+        if (hasSplit) {
+            const splitRes = this.bjState.splitResult;
+            if (splitRes === 'win') {
+                GameState.recordStat('bjHandsWon', 1);
+            } else if (splitRes === 'push') {
+                GameState.recordStat('bjHandsTied', 1);
+            } else if (splitRes === 'lose' || splitRes === 'bust') {
+                GameState.recordStat('bjHandsLosses', 1);
+            }
+        }
+
         if (net !== 0) {
             const dText = net > 0 ? `+${net}◈` : `${net}◈`;
             this.showChipDelta(dText, net > 0 ? '#2ecc71' : '#e74c3c');
@@ -568,6 +606,9 @@ export class BlackjackPanel {
         this.bjState     = nextHand(this.bjState);
         this.betDeducted  = false;
         this.splitDeducted = false;
+        this.prevPlayerCards = 0;
+        this.prevDealerCards = 0;
+        this.prevSplitCards = 0;
         // Clear split card display
         for (const obj of this.splitCardObjs) obj.destroy();
         this.splitCardObjs = [];
@@ -720,6 +761,11 @@ export class BlackjackPanel {
         this.updateHandValues();
         this.updateResultBanner();
         this.updateStats();
+
+        // Update previous cards trackers
+        this.prevPlayerCards = this.bjState.playerHand.length;
+        this.prevDealerCards = this.bjState.dealerHand.length;
+        this.prevSplitCards = this.bjState.splitHand ? this.bjState.splitHand.length : 0;
     }
 
     private updateChipBet(): void {
@@ -745,7 +791,9 @@ export class BlackjackPanel {
             const hidden = this.dealerRevealCount < Infinity
                 ? i >= this.dealerRevealCount
                 : (i === 1 && !this.bjState.dealerRevealed);
-            this.dealerCardObjs.push(...this.renderCard(startX + i * 46, baseY, hand[i], hidden));
+            const isNew = i >= this.prevDealerCards;
+            const delay = (this.prevDealerCards === 0) ? (i * 200 + 100) : 0;
+            this.dealerCardObjs.push(...this.renderCard(startX + i * 46, baseY, hand[i], hidden, isNew, delay));
         }
     }
 
@@ -779,7 +827,9 @@ export class BlackjackPanel {
         }
 
         for (let i = 0; i < hand.length; i++) {
-            this.playerCardObjs.push(...this.renderCard(startX + i * 46, baseY, hand[i], false));
+            const isNew = i >= this.prevPlayerCards;
+            const delay = (this.prevPlayerCards === 0) ? (i * 200) : 0;
+            this.playerCardObjs.push(...this.renderCard(startX + i * 46, baseY, hand[i], false, isNew, delay));
         }
     }
 
@@ -813,12 +863,14 @@ export class BlackjackPanel {
         }
 
         for (let i = 0; i < hand.length; i++) {
-            this.splitCardObjs.push(...this.renderCard(startX + i * 46, baseY, hand[i], false));
+            const isNew = i >= this.prevSplitCards;
+            const delay = (this.prevSplitCards === 0) ? (i * 200) : 0;
+            this.splitCardObjs.push(...this.renderCard(startX + i * 46, baseY, hand[i], false, isNew, delay));
         }
     }
 
     private renderCard(
-        x: number, y: number, card: Card, hidden: boolean,
+        x: number, y: number, card: Card, hidden: boolean, isNew: boolean, delay: number
     ): Phaser.GameObjects.GameObject[] {
         const w = 40;
         const h = 58;
@@ -872,34 +924,41 @@ export class BlackjackPanel {
         }
 
         // ── Card Slide & Flip Animation ──
-        const shoeX = PW / 2 - 40;
-        const shoeY = -PH / 2 + 100;
-        
-        cardContainer.setPosition(shoeX, shoeY);
-        cardContainer.setAlpha(0);
-        cardContainer.setScale(0.85);
+        if (isNew) {
+            const shoeX = PW / 2 - 40;
+            const shoeY = -PH / 2 + 100;
+            
+            cardContainer.setPosition(shoeX, shoeY);
+            cardContainer.setAlpha(0);
+            cardContainer.setScale(0.85);
 
-        this.scene.tweens.add({
-            targets: cardContainer,
-            x,
-            y,
-            alpha: 1,
-            scaleX: 1,
-            scaleY: 1,
-            duration: 380,
-            ease: 'Cubic.easeOut',
-            onComplete: () => {
-                if (!hidden) {
-                    this.scene.tweens.add({
-                        targets: cardContainer,
-                        scaleX: 0,
-                        duration: 120,
-                        yoyo: true,
-                        ease: 'Quad.easeIn'
-                    });
+            this.scene.tweens.add({
+                targets: cardContainer,
+                x,
+                y,
+                alpha: 1,
+                scaleX: 1,
+                scaleY: 1,
+                delay,
+                duration: 380,
+                ease: 'Cubic.easeOut',
+                onComplete: () => {
+                    if (!hidden) {
+                        this.scene.tweens.add({
+                            targets: cardContainer,
+                            scaleX: 0,
+                            duration: 120,
+                            yoyo: true,
+                            ease: 'Quad.easeIn'
+                        });
+                    }
                 }
-            }
-        });
+            });
+        } else {
+            cardContainer.setPosition(x, y);
+            cardContainer.setAlpha(1);
+            cardContainer.setScale(1);
+        }
 
         return [cardContainer];
     }

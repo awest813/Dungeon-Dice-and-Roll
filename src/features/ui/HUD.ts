@@ -18,9 +18,18 @@ const ZONE_ACCENT: Record<Zone, { fill: number; border: number; text: string }> 
     plinko:    { fill: 0x081a10, border: 0x2a7a4a, text: '#50cc80' },
     bingo:     { fill: 0x041014, border: 0x107090, text: '#00c8ff' },
     horses:    { fill: 0x1a1000, border: 0x8a6010, text: '#e8b020' },
+    vip:       { fill: 0x1a0530, border: 0xf6c855, text: '#f6c855' },
     floor:     { fill: 0x101018, border: 0x445577, text: '#8090aa' },
 };
 import { SoundManager } from '../../core/systems/SoundManager';
+
+const getPlayerTitle = (chips: number): string => {
+    if (chips >= 1000000) return 'Casino Legend';
+    if (chips >= 100000) return 'Whale';
+    if (chips >= 25000) return 'High Roller';
+    if (chips >= 5000) return 'Regular';
+    return 'Tourist';
+};
 
 const ZONE_LABELS: Record<Zone, string> = {
     entrance:  '↑ Entrance',
@@ -32,6 +41,7 @@ const ZONE_LABELS: Record<Zone, string> = {
     plinko:    '🎯 Plinko',
     bingo:     '🎱 Bingo Hall',
     horses:    '🏇 Horse Racing',
+    vip:       '👑 VIP Lounge',
     floor:     '🏛 Casino Floor',
 };
 
@@ -60,6 +70,19 @@ export class HUD {
     private muteLabel!: Phaser.GameObjects.Text;
     private muteHit!: Phaser.GameObjects.Rectangle;
 
+    // Stats button
+    private statsBtnGfx!: Phaser.GameObjects.Graphics;
+    private statsBtnLabel!: Phaser.GameObjects.Text;
+    private statsBtnHit!: Phaser.GameObjects.Rectangle;
+
+    private dailyBonusGfx!: Phaser.GameObjects.Graphics;
+    private dailyBonusLabel!: Phaser.GameObjects.Text;
+    private dailyBonusHit!: Phaser.GameObjects.Rectangle;
+    private dailyBonusVisible = false;
+    private dailyCheckTimer!: Phaser.Time.TimerEvent;
+
+    private onStatsClick?: () => void;
+
     // Session P&L tracker
     private sessionStartChips = -1;
     private plText!: Phaser.GameObjects.Text;
@@ -67,9 +90,11 @@ export class HUD {
     private unsub!: () => void;
     private prevChips = -1;
     private chipFlashTimer: Phaser.Time.TimerEvent | null = null;
+    private panelOpen = false;
 
-    constructor(scene: Phaser.Scene) {
+    constructor(scene: Phaser.Scene, onStatsClick?: () => void) {
         this.scene = scene;
+        this.onStatsClick = onStatsClick;
         this.build();
     }
 
@@ -83,6 +108,12 @@ export class HUD {
         this.playerGfx = this.scene.add.graphics()
             .setScrollFactor(0)
             .setDepth(DEPTH_HUD);
+
+        // Block clicks through HUD
+        this.scene.add.rectangle(barX + barW / 2, barY + barH / 2, barW, barH, 0, 0)
+            .setScrollFactor(0)
+            .setDepth(DEPTH_HUD)
+            .setInteractive();
 
         this.drawPlayerBar(false);
 
@@ -120,6 +151,12 @@ export class HUD {
         this.zoneGfx = this.scene.add.graphics()
             .setScrollFactor(0)
             .setDepth(DEPTH_HUD);
+
+        // Block clicks through zone badge
+        this.scene.add.rectangle(zoneX + zoneW / 2, zoneY + zoneH / 2, zoneW, zoneH, 0, 0)
+            .setScrollFactor(0)
+            .setDepth(DEPTH_HUD)
+            .setInteractive();
 
         // Zone badge bg — redrawn per zone in drawZoneBadge()
         this.drawZoneBadge('floor');
@@ -160,6 +197,39 @@ export class HUD {
         });
 
         this.setFreeChipsVisible(false);
+
+        // ── Daily Bonus button ──────────
+        const dbX = barX;
+        const dbY = barY + barH + 34; // Below free chips
+        const dbW = barW;
+        const dbH = 26;
+
+        this.dailyBonusGfx = this.scene.add.graphics()
+            .setScrollFactor(0)
+            .setDepth(DEPTH_HUD);
+
+        this.dailyBonusLabel = this.scene.add.text(dbX + dbW / 2, dbY + dbH / 2, '⏰ CLAIM DAILY BONUS (2500◈)', {
+            fontFamily: FONT, fontSize: '10px', color: '#f1c40f', fontStyle: 'bold',
+        })
+            .setScrollFactor(0)
+            .setDepth(DEPTH_HUD + 2)
+            .setOrigin(0.5);
+
+        this.dailyBonusHit = this.scene.add.rectangle(dbX + dbW / 2, dbY + dbH / 2, dbW, dbH, 0x000000, 0)
+            .setScrollFactor(0)
+            .setDepth(DEPTH_HUD + 3)
+            .setInteractive({ useHandCursor: true });
+
+        this.dailyBonusHit.on('pointerover', () => { this.drawDailyBonusBtn(true); });
+        this.dailyBonusHit.on('pointerout',  () => { this.drawDailyBonusBtn(false); });
+        this.dailyBonusHit.on('pointerdown', () => {
+            SoundManager.playClick();
+            GameState.update({ lastDailyClaim: Date.now() });
+            GameState.addChips(2500);
+            this.setDailyBonusVisible(false);
+        });
+
+        this.setDailyBonusVisible(false);
 
         // ── Sound mute toggle (top-left, to the right of player bar) ──────
         const muteSize = 28;
@@ -204,12 +274,64 @@ export class HUD {
             if (!nowMuted) SoundManager.playClick();
         });
 
+        // ── Stats/Menu button (top-left, next to mute button) ──────────────
+        const statsSize = 28;
+        const statsX = 262;
+        const statsY = 8;
+
+        this.statsBtnGfx = this.scene.add.graphics()
+            .setScrollFactor(0)
+            .setDepth(DEPTH_HUD);
+
+        this.statsBtnLabel = this.scene.add.text(statsX + statsSize / 2, statsY + statsSize / 2, '📊', {
+            fontFamily: FONT, fontSize: '13px',
+        })
+            .setScrollFactor(0)
+            .setDepth(DEPTH_HUD + 2)
+            .setOrigin(0.5);
+
+        this.statsBtnHit = this.scene.add.rectangle(statsX + statsSize / 2, statsY + statsSize / 2,
+            statsSize, statsSize, 0x000000, 0)
+            .setScrollFactor(0)
+            .setDepth(DEPTH_HUD + 3)
+            .setInteractive({ useHandCursor: true });
+
+        const drawStatsBtn = (hover: boolean): void => {
+            this.statsBtnGfx.clear();
+            this.statsBtnGfx.fillStyle(hover ? 0x2a2a3a : 0x141420, 0.88);
+            this.statsBtnGfx.fillRoundedRect(statsX, statsY, statsSize, statsSize, 5);
+            this.statsBtnGfx.lineStyle(1, 0x445566, 0.55);
+            this.statsBtnGfx.strokeRoundedRect(statsX, statsY, statsSize, statsSize, 5);
+        };
+        drawStatsBtn(false);
+
+        this.statsBtnHit.on('pointerover',  () => drawStatsBtn(true));
+        this.statsBtnHit.on('pointerout',   () => drawStatsBtn(false));
+        this.statsBtnHit.on('pointerdown', () => {
+            SoundManager.playClick();
+            if (this.onStatsClick) this.onStatsClick();
+        });
+
         // ── Subscribe to state changes ─────────────────────────────────────
         this.unsub = GameState.subscribe(s => this.refresh(s));
         const initial = GameState.get();
         this.prevChips = initial.chips;
         this.sessionStartChips = initial.chips;
         this.refresh(initial);
+
+        // Daily bonus polling
+        this.dailyCheckTimer = this.scene.time.addEvent({
+            delay: 1000,
+            loop: true,
+            callback: () => {
+                const s = GameState.get();
+                const canClaimDaily = (Date.now() - s.lastDailyClaim) > 60000;
+                const showDaily = canClaimDaily && !this.panelOpen;
+                if (showDaily !== this.dailyBonusVisible) {
+                    this.setDailyBonusVisible(showDaily);
+                }
+            }
+        });
     }
 
     private drawPlayerBar(chipFlash: boolean, flashGain = false): void {
@@ -319,10 +441,42 @@ export class HUD {
         else this.freeChipsGfx.clear();
     }
 
+    private drawDailyBonusBtn(hover: boolean): void {
+        const barW = 220;
+        const barH = 48;
+        const dbX = 0;
+        const dbY = barH + 34;
+        const dbW = barW;
+        const dbH = 26;
+        const g = this.dailyBonusGfx;
+        g.clear();
+
+        if (!this.dailyBonusVisible) return;
+
+        g.fillStyle(hover ? 0x3d300b : 0x241d08, 0.92);
+        g.fillRoundedRect(dbX, dbY, dbW, dbH, { tl: 0, tr: 0, bl: 5, br: 5 });
+        g.lineStyle(1, hover ? 0xcca610 : 0x826907, 0.9);
+        g.strokeRoundedRect(dbX, dbY, dbW, dbH, { tl: 0, tr: 0, bl: 5, br: 5 });
+    }
+
+    private setDailyBonusVisible(visible: boolean): void {
+        this.dailyBonusVisible = visible;
+        this.dailyBonusGfx.setVisible(visible);
+        this.dailyBonusLabel.setVisible(visible);
+        if (visible) {
+            this.dailyBonusHit.setInteractive({ useHandCursor: true });
+        } else {
+            this.dailyBonusHit.disableInteractive();
+        }
+        this.dailyBonusHit.setVisible(visible);
+        if (visible) this.drawDailyBonusBtn(false);
+        else this.dailyBonusGfx.clear();
+    }
+
     private prevZone: Zone = 'floor';
 
     private refresh(s: PlayerState): void {
-        this.nameText.setText(`★ ${s.displayName}`);
+        this.nameText.setText(`★ ${s.displayName}  [${getPlayerTitle(s.chips)}]`);
         this.chipsText.setText(`◈ ${s.chips.toLocaleString()} chips`);
         this.zoneText.setText(ZONE_LABELS[s.zone] ?? s.zone);
 
@@ -360,6 +514,16 @@ export class HUD {
             this.chipsText.setColor(flashColor);
             this.drawPlayerBar(true, gain);
 
+            // Pop animation
+            this.chipsText.setScale(1.25);
+            this.scene.tweens.add({
+                targets: this.chipsText,
+                scaleX: 1,
+                scaleY: 1,
+                duration: 350,
+                ease: 'Back.Out'
+            });
+
             if (this.chipFlashTimer) {
                 this.chipFlashTimer.remove();
                 this.chipFlashTimer = null;
@@ -372,10 +536,28 @@ export class HUD {
         }
         this.prevChips = s.chips;
 
-        // Free chips button — show whenever broke, regardless of active zone/interaction
-        const broke = s.chips === 0;
+        // Free chips button — show whenever broke, but only when no panel is open
+        const broke = s.chips === 0 && !this.panelOpen;
         if (broke !== this.freeChipsVisible) {
             this.setFreeChipsVisible(broke);
+        }
+    }
+
+    /** Call with true when any panel is open so the free-chips button is suppressed (prevents overlay overlap). */
+    setPanelOpen(open: boolean): void {
+        this.panelOpen = open;
+        // If a panel just opened and free chips was showing, hide it
+        if (open && this.freeChipsVisible) {
+            this.setFreeChipsVisible(false);
+        } else if (!open && GameState.get().chips === 0) {
+            // Re-show if player is still broke after panel closes
+            this.setFreeChipsVisible(true);
+        }
+
+        if (open && this.dailyBonusVisible) {
+            this.setDailyBonusVisible(false);
+        } else if (!open && (Date.now() - GameState.get().lastDailyClaim) > 60000) {
+            this.setDailyBonusVisible(true);
         }
     }
 
@@ -397,5 +579,14 @@ export class HUD {
         this.muteGfx.destroy();
         this.muteLabel.destroy();
         this.muteHit.destroy();
+        this.statsBtnGfx.destroy();
+        this.statsBtnLabel.destroy();
+        this.statsBtnHit.destroy();
+        if (this.dailyCheckTimer) {
+            this.dailyCheckTimer.remove();
+        }
+        this.dailyBonusGfx.destroy();
+        this.dailyBonusLabel.destroy();
+        this.dailyBonusHit.destroy();
     }
 }

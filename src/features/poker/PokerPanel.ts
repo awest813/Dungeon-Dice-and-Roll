@@ -3,7 +3,7 @@ import Phaser from 'phaser';
 import { GameState } from '../../core/state/GameState';
 import {
     GAME_WIDTH, GAME_HEIGHT, DEPTH_PANEL,
-    COL_FELT, COL_TRIM,
+    COL_FELT, COL_TRIM, FONT,
 } from '../../game/constants';
 import {
     PokerGameState, PokerPlayer, PlayerAction,
@@ -19,6 +19,7 @@ import {
     PERSONALITY_TIGHT,
     PERSONALITY_BLUFFER,
     PERSONALITY_AGGRESSIVE,
+    evalTell,
 } from './PokerAI';
 import { SoundManager } from '../../core/systems/SoundManager';
 import { ToastManager } from '../ui/ToastManager';
@@ -113,6 +114,7 @@ export class PokerPanel {
 
     private seatBtns: Map<number, Phaser.GameObjects.Container> = new Map();
     private communityCardObjs: Phaser.GameObjects.Container[] = [];
+    private prevCommunityCards: Array<string | null> = [null, null, null, null, null];
     private playerHandArea!: Phaser.GameObjects.Container;
     private playerHandCards: Phaser.GameObjects.Container[] = [];
     private handStrengthText!: Phaser.GameObjects.Text;
@@ -120,6 +122,7 @@ export class PokerPanel {
 
     private game!: PokerGameState;
     private playerSeatId: number | null = null;
+    private isSpectating = false;
     private aiTimers: Phaser.Time.TimerEvent[] = [];
     private turnTween: Phaser.Tweens.Tween | null = null;
     private waitingForAI = false;
@@ -353,6 +356,8 @@ export class PokerPanel {
         closeRect.on('pointerup',   () => closeRect.setFillStyle(0x5a2a2a));
         this.container.add([closeRect, closeLabel]);
 
+        this.showInitScreen();
+
         // Help button — shows hand rankings reference
         const helpRect = this.scene.add.rectangle(pw / 2 - 30, -ph / 2 + 22, 40, 22, 0x0a1a2a, 1)
             .setStrokeStyle(1, 0x3a5a7a, 1).setInteractive({ useHandCursor: true });
@@ -508,6 +513,15 @@ export class PokerPanel {
             btn.add(stackGfx);
         }
 
+        // Pocket chips balance display below seat for player
+        if (isYou) {
+            const pocketStr = `Pocket: ${GameState.get().chips}◈`;
+            const pocketLabel = this.scene.add.text(0, H / 2 + 8, pocketStr, {
+                fontFamily: FONT, fontSize: '8px', color: '#8888aa',
+            }).setOrigin(0.5);
+            btn.add(pocketLabel);
+        }
+
         // Clickable only for empty non-AI seats while not in a game and player has not yet chosen a seat
         if (!sc.aiName && !isYou && !this.game && this.playerSeatId === null) {
             rect.setInteractive({ useHandCursor: true });
@@ -516,17 +530,22 @@ export class PokerPanel {
             rect.on('pointerdown', () => this.joinSeat(sc.id));
         }
 
-        // Show AI hole cards during showdown
-        if (
-            this.game?.phase === 'showdown' &&
-            gamePlayer && !gamePlayer.folded &&
-            gamePlayer.isAI &&  // only for AI opponents
-            gamePlayer.holeCards.length === 2
-        ) {
+        // Show AI hole cards during showdown OR all hole cards during spectator mode
+        const showCards = 
+            (this.game?.phase === 'showdown' && gamePlayer && !gamePlayer.folded && gamePlayer.isAI) ||
+            (this.isSpectating && gamePlayer && !gamePlayer.folded && gamePlayer.holeCards.length === 2);
+
+        if (showCards) {
             const [c1, c2] = gamePlayer.holeCards;
             botLabel.setText('');
             const h1 = makeCardObj(this.scene, c1, false, -18, 14);
             const h2 = makeCardObj(this.scene, c2, false, 18, 14);
+            btn.add([h1, h2]);
+        } else if (gamePlayer && !gamePlayer.folded && gamePlayer.holeCards.length === 2) {
+            // Show face-down cards for active players who are not showing their cards
+            botLabel.setText('');
+            const h1 = makeCardObj(this.scene, null, true, -18, 14);
+            const h2 = makeCardObj(this.scene, null, true, 18, 14);
             btn.add([h1, h2]);
         }
 
@@ -565,7 +584,8 @@ export class PokerPanel {
     // ── Game Flow ─────────────────────────────────────────────────────────────
 
     private startHand(): void {
-        if (this.playerSeatId === null) return;
+        if (this.playerSeatId === null && !this.isSpectating) return;
+        this.clearPotChips();
 
         const prevPlayers = this.game?.players ?? [];
 
@@ -587,6 +607,13 @@ export class PokerPanel {
                     chips,
                     isAI: false,
                 });
+            } else if (this.isSpectating) {
+                const prev = prevPlayers.find(p => p.seatId === sc.id);
+                let chips = prev ? prev.chips : 500;
+                if (chips === 0) chips = 500;
+                const guestNames = ['LuckyLucy', 'Checky', 'Foxy', 'BullyBob', 'WhaleWin', 'SlickSteve'];
+                const aiGuestName = guestNames[sc.id] ?? 'GuestAI';
+                activePlayers.push({ seatId: sc.id, name: aiGuestName, chips, isAI: true });
             }
         });
 
@@ -619,8 +646,13 @@ export class PokerPanel {
         }
 
         this.showDealButton(false);
-        this.playerHandArea.setVisible(true);
+        this.playerHandArea.setVisible(!this.isSpectating);
         this.handsPlayed++;
+        if (!this.isSpectating) {
+            GameState.recordStat('pokerHandsPlayed', 1);
+        }
+        GameState.consumeBuff('pokerTell'); // Consume 1 hand of buff
+        
         this.refreshAllSeats();
         this.updateCommunityCards();
         this.updatePot();
@@ -663,6 +695,13 @@ export class PokerPanel {
             const t = this.scene.time.delayedCall(delay, () => {
                 this.waitingForAI = false;
                 this.aiThinkingText.setText('');
+                
+                const hasTellBuff = GameState.hasBuff('pokerTell');
+                const tell = evalTell(this.game, activePlayerIdx, undefined, hasTellBuff);
+                if (tell) {
+                    this.showAITell(activePlayer.seatId, tell);
+                }
+
                 this.doAIAction(activePlayerIdx);
             });
             this.aiTimers.push(t);
@@ -689,6 +728,26 @@ export class PokerPanel {
         this.updateHandStrength();
         this.setStatus(this.game.statusMessage, '#c9a84c');
         this.scheduleNextAction();
+    }
+
+    private showAITell(seatId: number, emoji: string): void {
+        const scIdx = SEAT_CONFIGS.findIndex(s => s.id === seatId);
+        if (scIdx < 0) return;
+        const [sx, sy] = SEAT_POSITIONS[scIdx];
+        
+        const tellText = this.scene.add.text(sx + 36, sy - 26, emoji, {
+            fontSize: '18px'
+        }).setOrigin(0.5).setDepth(DEPTH_PANEL + 2);
+        this.container.add(tellText);
+        
+        this.scene.tweens.add({
+            targets: tellText,
+            y: sy - 46,
+            alpha: 0,
+            duration: 1800,
+            ease: 'Cubic.easeOut',
+            onComplete: () => tellText.destroy()
+        });
     }
 
     // ── Player Action UI ──────────────────────────────────────────────────────
@@ -924,6 +983,16 @@ export class PokerPanel {
         const gpHistory = this.game.players.find(p => p.seatId === this.playerSeatId);
         if (gpHistory !== undefined && this.handStartChips !== -1) {
             const delta = gpHistory.chips - this.handStartChips;
+            const wagered = Math.floor(this.game.pot / 2);
+            const won = delta > 0 ? this.game.pot : (delta === 0 ? wagered : 0);
+
+            GameState.recordStat('pokerWagered', wagered);
+            GameState.recordStat('pokerWon', won);
+            if (delta > 0) {
+                GameState.recordStat('pokerHandsWon', 1);
+                GameState.recordMaxStat('pokerMaxPotWon', this.game.pot);
+            }
+
             this.handHistory.push({
                 hand: this.handsPlayed,
                 result: delta > 0 ? 'Won' : delta < 0 ? 'Lost' : 'Even',
@@ -943,7 +1012,17 @@ export class PokerPanel {
             }
         }
 
-        const t = this.scene.time.delayedCall(3000, () => {
+        const t = this.scene.time.delayedCall(this.isSpectating ? 4000 : 3000, () => {
+            if (this.isSpectating) {
+                this.clearCommunityCards();
+                this.handNumText.setText('');
+                this.potText.setText('');
+                this.phaseText.setText('');
+                this.handStrengthText.setText('');
+                this.startHand();
+                return;
+            }
+
             const gp = this.game.players.find(p => p.seatId === this.playerSeatId);
             if (!gp || gp.chips === 0) {
                 this.setStatus("You're out of chips! Leaving table.", '#e74c3c');
@@ -1009,21 +1088,41 @@ export class PokerPanel {
                 this.container.add(chip);
                 this.potChipObjs.push(chip);
 
+                // Stack target: Imperfect organic stack offset
+                const targetX = tx + (Math.random() - 0.5) * 4;
+                const targetY = ty - c * 2.5;
+
                 // Stagger each chip by 35 ms, then slide to seat position
                 const delay = c * 35;
+                const isLast = (c === CHIP_COUNT - 1);
+                
                 this.scene.tweens.add({
                     targets: chip,
-                    x: tx + (Math.random() - 0.5) * 14,  // slight landing scatter
-                    y: ty + (Math.random() - 0.5) * 8,
-                    alpha: { from: 1, to: 0 },
+                    x: targetX,
+                    y: targetY,
                     duration: 520,
                     delay,
-                    ease: 'Cubic.easeIn',
+                    ease: 'Cubic.easeOut',
                     onStart: () => {
                         if (c === 0) SoundManager.playChipSlide();
                     },
                     onComplete: () => {
-                        if (c === CHIP_COUNT - 1) SoundManager.playChipLand();
+                        if (isLast) {
+                            SoundManager.playChipLand();
+                            
+                            // Visual card pop/bounce when chips land
+                            const btn = this.seatBtns.get(seatId);
+                            if (btn && btn.active) {
+                                this.scene.tweens.add({
+                                    targets: btn,
+                                    scaleX: 1.08,
+                                    scaleY: 1.08,
+                                    yoyo: true,
+                                    duration: 120,
+                                    ease: 'Quad.easeOut'
+                                });
+                            }
+                        }
                     },
                 });
             }
@@ -1058,23 +1157,34 @@ export class PokerPanel {
             this.communityCardObjs.push(obj);
             this.container.add(obj);
 
-            // Flip-in animation for real (non-placeholder) cards
+            // Flip-in animation only for newly dealt community cards
             if (card) {
-                obj.setScale(0.05, 1);
-                this.scene.tweens.add({
-                    targets: obj,
-                    scaleX: 1,
-                    duration: 160,
-                    ease: 'Back.easeOut',
-                    delay: i * 80,
-                });
+                const cardSig = `${card.rank}:${card.suit}`;
+                const isNew = this.prevCommunityCards[i] !== cardSig;
+                if (isNew) {
+                    obj.setScale(0.05, 1);
+                    this.scene.tweens.add({
+                        targets: obj,
+                        scaleX: 1,
+                        duration: 160,
+                        ease: 'Back.easeOut',
+                        delay: i * 80,
+                    });
+                }
             }
         }
+
+        // Store current signatures for next call
+        this.prevCommunityCards = [0, 1, 2, 3, 4].map(idx => {
+            const c = this.game.community[idx] ?? null;
+            return c ? `${c.rank}:${c.suit}` : null;
+        });
 
         this.updatePlayerHandCards();
     }
 
     private clearCommunityCards(): void {
+        this.prevCommunityCards = [null, null, null, null, null];
         this.communityCardObjs.forEach(o => o.destroy());
         this.communityCardObjs = [];
         for (let i = 0; i < 5; i++) {
@@ -1263,6 +1373,86 @@ export class PokerPanel {
             GAME_WIDTH / 2, GAME_HEIGHT / 2,
             [popBg, popTitle, divider, ...items, closeHint],
         ).setScrollFactor(0).setDepth(DEPTH_PANEL + 5);
+    }
+
+    private showInitScreen(): void {
+        this.actionArea.removeAll(true);
+        this.playerSeatId = null;
+        this.isSpectating = false;
+
+        // Draw "Spectate Game" button in the center of actionArea
+        const spectateRect = this.scene.add.rectangle(0, 0, 160, 32, 0x1a150a, 1)
+            .setStrokeStyle(1, 0x5a4a1a, 1)
+            .setInteractive({ useHandCursor: true });
+        const spectateLabel = this.scene.add.text(0, 0, '👁  Spectate Game', {
+            fontFamily: FONT, fontSize: '12px', color: '#c9a84c', fontStyle: 'bold'
+        }).setOrigin(0.5);
+
+        spectateRect.on('pointerover', () => {
+            spectateRect.setFillStyle(0x2d2514);
+            spectateRect.setStrokeStyle(1.5, 0xffd700, 1);
+        });
+        spectateRect.on('pointerout', () => {
+            spectateRect.setFillStyle(0x1a150a);
+            spectateRect.setStrokeStyle(1, 0x5a4a1a, 1);
+        });
+        spectateRect.on('pointerdown', () => {
+            SoundManager.playClick();
+            this.startSpectating();
+        });
+
+        this.actionArea.add([spectateRect, spectateLabel]);
+        this.setStatus('Click a green OPEN seat to join, or click Spectate Game to watch AI play.', '#6a8a6a');
+    }
+
+    private startSpectating(): void {
+        this.isSpectating = true;
+        this.playerSeatId = null;
+        this.setStatus('Spectating AI Game... Click Stop Spectating to play.', '#c9a84c');
+        this.showSpectatorActions();
+        this.startHand();
+    }
+
+    private showSpectatorActions(): void {
+        this.actionArea.removeAll(true);
+
+        const stopRect = this.scene.add.rectangle(0, 0, 160, 32, 0x3a1e1e, 1)
+            .setStrokeStyle(1, 0x8a3a3a, 1)
+            .setInteractive({ useHandCursor: true });
+        const stopLabel = this.scene.add.text(0, 0, '⏹  Stop Spectating', {
+            fontFamily: FONT, fontSize: '12px', color: '#e05050', fontStyle: 'bold'
+        }).setOrigin(0.5);
+
+        stopRect.on('pointerover', () => {
+            stopRect.setFillStyle(0x5a2a2a);
+            stopRect.setStrokeStyle(1.5, 0xff6666, 1);
+        });
+        stopRect.on('pointerout',  () => {
+            stopRect.setFillStyle(0x3a1e1e);
+            stopRect.setStrokeStyle(1, 0x8a3a3a, 1);
+        });
+        stopRect.on('pointerdown', () => {
+            SoundManager.playClick();
+            this.stopSpectating();
+        });
+
+        this.actionArea.add([stopRect, stopLabel]);
+    }
+
+    private stopSpectating(): void {
+        this.isSpectating = false;
+        // Cancel all AI timers
+        this.aiTimers.forEach(t => t.remove());
+        this.aiTimers = [];
+        this.waitingForAI = false;
+        this.game = null as any;
+        this.clearCommunityCards();
+        this.potText.setText('');
+        this.phaseText.setText('');
+        this.handStrengthText.setText('');
+        this.handNumText.setText('');
+        this.refreshAllSeats();
+        this.showInitScreen();
     }
 
     // ── Close ─────────────────────────────────────────────────────────────────

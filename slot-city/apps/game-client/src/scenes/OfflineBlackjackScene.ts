@@ -401,7 +401,7 @@ export class OfflineBlackjackScene extends Phaser.Scene {
     else this.losses++;
 
     // Persist chips
-    localStore.setChips(this.chips);
+    localStore.save({ chips: this.chips });
     networkManager.syncChipsFromStore();
 
     this.enterPhase("result");
@@ -617,7 +617,7 @@ export class OfflineBlackjackScene extends Phaser.Scene {
   // ── Navigation ────────────────────────────────────────────────────────────────
 
   private async returnToLobby(): Promise<void> {
-    localStore.setChips(this.chips);
+    localStore.save({ chips: this.chips });
     networkManager.syncChipsFromStore();
     this.scene.start("CasinoLobbyScene");
   }

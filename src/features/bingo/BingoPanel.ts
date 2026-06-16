@@ -507,6 +507,8 @@ export class BingoPanel {
 
         // Deduct the bet upfront (same pattern as SlotsPanel / BlackjackPanel)
         GameState.addChips(-this.currentBet);
+        GameState.recordStat('bingoCardsPlayed', 1);
+        GameState.recordStat('bingoWagered', this.currentBet);
 
         this.gameState = createGame(this.currentBet);
         this.refreshCard();
@@ -664,6 +666,8 @@ export class BingoPanel {
             const winnings = this.gameState.bet * PAYOUTS[this.gameState.winType as WinType];
             GameState.addChips(winnings);
             this.totalWon += winnings;
+            GameState.recordStat('bingoCardsWon', 1);
+            GameState.recordStat('bingoWon', winnings);
             this.triggerConfettiExplosion();
 
             if (this.gameState.winType === 'blackout') {
@@ -842,10 +846,13 @@ export class BingoPanel {
 
     private refreshLastBall(ball: number | null): void {
         this.lastBallGfx.clear();
+        this.lastBallGfx.setScale(1.0);
 
         const bx = CTRL_CX;
         const by = CARD_TOP + 60;
         const r  = 26;
+
+        this.lastBallGfx.setPosition(bx, by);
 
         if (ball !== null) {
             const letter = ballLetter(ball);
@@ -853,27 +860,42 @@ export class BingoPanel {
 
             // Outer glow
             this.lastBallGfx.fillStyle(color, 0.15);
-            this.lastBallGfx.fillCircle(bx, by, r + 6);
+            this.lastBallGfx.fillCircle(0, 0, r + 6);
             // Ball body
             this.lastBallGfx.fillStyle(color, 0.25);
-            this.lastBallGfx.fillCircle(bx, by, r);
+            this.lastBallGfx.fillCircle(0, 0, r);
             this.lastBallGfx.lineStyle(2, color, 0.9);
-            this.lastBallGfx.strokeCircle(bx, by, r);
+            this.lastBallGfx.strokeCircle(0, 0, r);
             // Highlight
             this.lastBallGfx.fillStyle(0xffffff, 0.15);
-            this.lastBallGfx.fillCircle(bx - 8, by - 8, 10);
+            this.lastBallGfx.fillCircle(-8, -8, 10);
 
             this.lastBallLetter.setText(letter)
                 .setColor(Phaser.Display.Color.IntegerToColor(color).rgba);
             this.lastBallText.setText(`${ball}`)
                 .setColor(Phaser.Display.Color.IntegerToColor(color).rgba);
+
+            // Pop scale animation
+            this.lastBallGfx.setScale(0.15);
+            this.lastBallLetter.setScale(0.15);
+            this.lastBallText.setScale(0.15);
+
+            this.scene.tweens.add({
+                targets: [this.lastBallGfx, this.lastBallLetter, this.lastBallText],
+                scaleX: 1.0,
+                scaleY: 1.0,
+                duration: 320,
+                ease: 'Back.easeOut'
+            });
         } else {
             this.lastBallGfx.fillStyle(0x050f18, 1);
-            this.lastBallGfx.fillCircle(bx, by, r);
+            this.lastBallGfx.fillCircle(0, 0, r);
             this.lastBallGfx.lineStyle(1.5, 0x103040, 0.8);
-            this.lastBallGfx.strokeCircle(bx, by, r);
+            this.lastBallGfx.strokeCircle(0, 0, r);
             this.lastBallLetter.setText('');
             this.lastBallText.setText('?').setColor('#204060');
+            this.lastBallLetter.setScale(1.0);
+            this.lastBallText.setScale(1.0);
         }
     }
 
@@ -921,6 +943,18 @@ export class BingoPanel {
             }).setOrigin(0.5);
             this.container.add(txt);
             this.historyObjs.push(txt);
+
+            // Pop scale animation for the newest called ball in history
+            if (i === show.length - 1) {
+                txt.setScale(0.15);
+                this.scene.tweens.add({
+                    targets: txt,
+                    scaleX: 1.0,
+                    scaleY: 1.0,
+                    duration: 250,
+                    ease: 'Back.easeOut'
+                });
+            }
         });
     }
 

@@ -10,6 +10,8 @@ export class LoginScene extends Phaser.Scene {
   private modeBtn!: Phaser.GameObjects.Text;
   private formTitle!: Phaser.GameObjects.Text;
   private submitBtn!: Phaser.GameObjects.Text;
+  private selectedOutfit = "default";
+  private outfitContainer: Phaser.GameObjects.Container | null = null;
 
   constructor() {
     super({ key: "LoginScene" });
@@ -145,7 +147,7 @@ export class LoginScene extends Phaser.Scene {
     soloBtn.on("pointerout",  () => soloBtn.setColor("#aa00ff"));
     soloBtn.on("pointerdown", () => {
       const name = guestInput.value.trim() || "Guest";
-      networkManager.setGuestUser(name);
+      networkManager.setGuestUser(name, this.selectedOutfit);
       this.cleanupAllInputs();
       this.scene.start("CasinoLobbyScene");
     });
@@ -162,6 +164,8 @@ export class LoginScene extends Phaser.Scene {
       color: "#333355",
       fontFamily: "monospace",
     }).setOrigin(0.5);
+
+    this.drawOutfitSelector(width / 2, dividerY - 22);
 
     // Enter key support
     this.input.keyboard?.on("keydown-ENTER", () => this.handleSubmit());
@@ -240,7 +244,7 @@ export class LoginScene extends Phaser.Scene {
 
     try {
       if (this.mode === "register") {
-        await networkManager.register(username, password);
+        await networkManager.register(username, password, this.selectedOutfit);
       } else {
         await networkManager.login(username, password);
       }
@@ -267,6 +271,86 @@ export class LoginScene extends Phaser.Scene {
     if (gi?.parentNode) {
       document.body.removeChild(gi);
     }
+    if (this.outfitContainer) {
+      this.outfitContainer.destroy();
+      this.outfitContainer = null;
+    }
+  }
+
+  private drawOutfitSelector(x: number, y: number): void {
+    if (this.outfitContainer) {
+      this.outfitContainer.destroy();
+    }
+
+    const container = this.add.container(x, y);
+    this.outfitContainer = container;
+
+    const label = this.add.text(0, -20, "SELECT OUTFIT COLOR", {
+      fontSize: "11px",
+      color: "#888888",
+      fontFamily: "monospace",
+      fontStyle: "bold",
+    }).setOrigin(0.5);
+    container.add(label);
+
+    const outfits = ["default", "red", "green", "gold", "purple"];
+    const colors = [0x4488ff, 0xff4444, 0x44ff88, 0xffd700, 0xaa44ff];
+    const spacing = 36;
+
+    outfits.forEach((key, idx) => {
+      const bx = -((outfits.length - 1) * spacing) / 2 + idx * spacing;
+      
+      const itemContainer = this.add.container(bx, 5);
+      container.add(itemContainer);
+      
+      const selectGfx = this.add.graphics();
+      const isSelected = this.selectedOutfit === key;
+      
+      // Outer border/glow if selected
+      if (isSelected) {
+        selectGfx.lineStyle(2, 0xffffff, 1.0);
+        selectGfx.strokeCircle(0, 0, 12);
+        selectGfx.lineStyle(4, colors[idx], 0.3);
+        selectGfx.strokeCircle(0, 0, 14);
+      } else {
+        selectGfx.lineStyle(1.5, 0x334488, 0.6);
+        selectGfx.strokeCircle(0, 0, 11);
+      }
+      
+      // Main color fill
+      selectGfx.fillStyle(colors[idx], 1);
+      selectGfx.fillCircle(0, 0, 9);
+      
+      itemContainer.add(selectGfx);
+
+      const hit = this.add.circle(0, 0, 14, 0x000000, 0)
+        .setInteractive({ useHandCursor: true });
+      itemContainer.add(hit);
+
+      // Hover tweens
+      hit.on("pointerover", () => {
+        this.tweens.add({
+          targets: itemContainer,
+          scale: 1.25,
+          duration: 120,
+          ease: "Quad.easeOut"
+        });
+      });
+      
+      hit.on("pointerout", () => {
+        this.tweens.add({
+          targets: itemContainer,
+          scale: 1.0,
+          duration: 120,
+          ease: "Quad.easeOut"
+        });
+      });
+
+      hit.on("pointerdown", () => {
+        this.selectedOutfit = key;
+        this.drawOutfitSelector(x, y);
+      });
+    });
   }
 
   shutdown(): void {

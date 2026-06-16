@@ -91,8 +91,8 @@ export class Panel {
         g.lineStyle(8, COL_UI_BORDER, 0.06);
         g.strokeRoundedRect(px - 2, py - 2, this.w + 4, this.h + 4, PANEL_RADIUS + 3);
 
-        // Main background
-        g.fillStyle(COL_UI_BG, 1);
+        // Main background with sleek gradient
+        g.fillGradientStyle(0x182436, 0x182436, 0x0a101a, 0x0a101a, 0.95, 0.95, 0.98, 0.98);
         g.fillRoundedRect(px, py, this.w, this.h, PANEL_RADIUS);
         g.fillStyle(COL_NEON_BLUE, 0.05);
         g.fillCircle(cx - this.w * 0.2, cy - this.h * 0.15, this.w * 0.28);

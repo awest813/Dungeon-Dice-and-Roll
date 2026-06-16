@@ -12,14 +12,7 @@ import {
 import { SoundManager } from '../../core/systems/SoundManager';
 import { ToastManager } from '../ui/ToastManager';
 
-const SYMBOLS  = ['🍒', '🍋', '🍊', '🍇', '⭐', '💎', '7️⃣'];
-const WEIGHTS  = [30, 25, 20, 12, 7, 4, 2];  // weighted rarity (lower = rarer)
-
-// Payout multipliers for matching symbols (3-of-a-kind)
-const PAYOUTS: Record<string, number> = {
-    '🍒': 2, '🍋': 3, '🍊': 4, '🍇': 6, '⭐': 10, '💎': 20, '7️⃣': 50,
-};
-const CHERRY_PAIR_PAYOUT = 1;   // Two cherries = small consolation
+import { SYMBOLS, PAYOUTS, weightedRandom, evaluateSpin, SpinResult } from './SlotsEngine';
 
 const SYMBOL_KEYS: Record<string, string> = {
     '🍒': 'slots_cherry',
@@ -32,22 +25,13 @@ const SYMBOL_KEYS: Record<string, string> = {
     '🎰': 'slots_wild'
 };
 
-function weightedRandom(): string {
-    const total = WEIGHTS.reduce((a, b) => a + b, 0);
-    let r = Math.random() * total;
-    for (let i = 0; i < SYMBOLS.length; i++) {
-        r -= WEIGHTS[i];
-        if (r <= 0) return SYMBOLS[i];
-    }
-    return SYMBOLS[0];
-}
-
 type SpinState = 'idle' | 'spinning' | 'result';
-const BET_OPTIONS = [10, 25, 50, 100];
 
 export class SlotsPanel {
     private scene:   Phaser.Scene;
     private onClose: () => void;
+    private isHighStakes: boolean = false;
+    private betOptions: number[] = [10, 25, 50, 100];
 
     // Phaser objects
     private overlay!:      Phaser.GameObjects.Rectangle;
@@ -88,11 +72,14 @@ export class SlotsPanel {
 
     // State
     private spinState:    SpinState = 'idle';
+    private spinLocked:   boolean   = false;   // extra lockout during 500ms post-result cooldown
     private currentBet:   number    = 25;
     private reelValues:   string[]  = ['🎰', '🎰', '🎰'];
     private spinTimers:   Phaser.Time.TimerEvent[] = [];
     private spinDone:     boolean[] = [false, false, false];
     private closed:       boolean   = false;
+    private freeSpins:    number    = 0;
+    private wasFreeSpin:  boolean   = false;
 
     // Session stats
     private totalSpins   = 0;
@@ -105,9 +92,17 @@ export class SlotsPanel {
     private readonly PW = 520;
     private readonly PH = 460;
 
-    constructor(scene: Phaser.Scene, onClose: () => void) {
+    constructor(scene: Phaser.Scene, onClose: () => void, isHighStakes = false) {
         this.scene   = scene;
         this.onClose = onClose;
+        this.isHighStakes = isHighStakes;
+        if (this.isHighStakes) {
+            this.betOptions = [100, 250, 500, 1000];
+            this.currentBet = 250;
+        } else {
+            this.betOptions = [10, 25, 50, 100];
+            this.currentBet = 25;
+        }
         this.build();
     }
 
@@ -138,7 +133,8 @@ export class SlotsPanel {
         });
 
         // ── Title ─────────────────────────────────────────────────────────
-        const title = this.scene.add.text(0, -PH / 2 + 26, '🎰  SLOT MACHINE', {
+        const titleStr = this.isHighStakes ? '🏆  HIGH-STAKES SLOTS' : '🎰  SLOT MACHINE';
+        const title = this.scene.add.text(0, -PH / 2 + 26, titleStr, {
             fontFamily: FONT, fontSize: '20px', color: '#c9a84c', fontStyle: 'bold',
         }).setOrigin(0.5);
         this.container.add(title);
@@ -183,7 +179,7 @@ export class SlotsPanel {
         this.escKey   = this.scene.input.keyboard!.addKey('ESC');
         this.spaceKey = this.scene.input.keyboard!.addKey('SPACE');
         this.escKey.on('down',   () => this.close());
-        this.spaceKey.on('down', () => { if (this.spinState === 'idle') this.spin(); });
+        this.spaceKey.on('down', () => { if (this.spinState === 'idle' && !this.spinLocked) this.spin(); });
 
         this.updateChipsDisplay();
         this.updateBetDisplay();
@@ -201,74 +197,78 @@ export class SlotsPanel {
         const g  = this.panelGfx;
         g.clear();
 
+        // High-Stakes color theme overrides
+        const bodyColor = this.isHighStakes ? 0x2b0830 : COL_SLOT_BODY;       // royal purple vs blue-black
+        const highlightColor = this.isHighStakes ? 0x4d1654 : 0x1c1c5a;  // dark purple highlight vs blue-highlight
+        const stripeColor = this.isHighStakes ? 0x8a2090 : 0x4444aa;     // purple neon stripes vs blue neon stripes
+        const trimColor = this.isHighStakes ? 0xf6c855 : COL_SLOT_TRIM;       // gold border vs default trim
+        const innerTrim = this.isHighStakes ? 0xffe885 : COL_TRIM;
+        const innerTrimDim = this.isHighStakes ? 0xcba84a : COL_TRIM_DIM;
+        const headerBg = this.isHighStakes ? 0x1a051d : 0x0d0d28;
+        const headerHighlight = this.isHighStakes ? 0x3d0d44 : 0x1a1a4a;
+
         // Outer shadow
         g.fillStyle(0x000000, 0.55);
         g.fillRoundedRect(px + 5, py + 6, PW, PH, PANEL_RADIUS + 2);
-        // Body — deep blue-black
-        g.fillStyle(COL_SLOT_BODY, 1);
+        // Body
+        g.fillStyle(bodyColor, 1);
         g.fillRoundedRect(px, py, PW, PH, PANEL_RADIUS);
         // Metallic left edge highlight
-        g.fillStyle(0x1c1c5a, 0.35);
+        g.fillStyle(highlightColor, 0.35);
         g.fillRoundedRect(px, py, 6, PH, { tl: PANEL_RADIUS, bl: PANEL_RADIUS, tr: 0, br: 0 });
         // Metallic right edge shadow
         g.fillStyle(0x000000, 0.2);
         g.fillRoundedRect(px + PW - 6, py, 6, PH, { tl: 0, bl: 0, tr: PANEL_RADIUS, br: PANEL_RADIUS });
 
         // ── Vertical chrome stripe decorations on panel sides ─────────────
-        // Left side chrome stripes (above/below reel area)
         const stripeX1 = px + 10;
         const stripeX2 = px + PW - 14;
-        const stripesAboveY = py + 56;    // below header
-        const stripesAboveH = 46;         // above reel (~reelPanelY - reelH/2 from container center)
-        const stripesBelowY = cy - 26 + 59 + 20;  // below reel window
+        const stripesAboveY = py + 56;
+        const stripesAboveH = 46;
+        const stripesBelowY = cy - 26 + 59 + 20;
         const stripesBelowH = 46;
         const STRIPE_COUNT  = 3;
         const STRIPE_STEP   = 5;
         const STRIPE_ALPHAS = [0.18, 0.10, 0.06];
-        const sColor        = 0x4444aa;
         for (let si = 0; si < STRIPE_COUNT; si++) {
             const sx1    = stripeX1 + si * STRIPE_STEP;
             const sx2    = stripeX2 - si * STRIPE_STEP;
             const sAlpha = STRIPE_ALPHAS[si];
-            // Left side — above reel
-            g.fillStyle(sColor, sAlpha);
+            g.fillStyle(stripeColor, sAlpha);
             g.fillRect(sx1, stripesAboveY, 3, stripesAboveH);
-            // Left side — below reel
-            g.fillStyle(sColor, sAlpha);
+            g.fillStyle(stripeColor, sAlpha);
             g.fillRect(sx1, stripesBelowY, 3, stripesBelowH);
-            // Right side — above reel
-            g.fillStyle(sColor, sAlpha);
+            g.fillStyle(stripeColor, sAlpha);
             g.fillRect(sx2, stripesAboveY, 3, stripesAboveH);
-            // Right side — below reel
-            g.fillStyle(sColor, sAlpha);
+            g.fillStyle(stripeColor, sAlpha);
             g.fillRect(sx2, stripesBelowY, 3, stripesBelowH);
         }
 
         // Header band
-        g.fillStyle(0x0d0d28, 1);
+        g.fillStyle(headerBg, 1);
         g.fillRoundedRect(px, py, PW, 52, { tl: PANEL_RADIUS, tr: PANEL_RADIUS, bl: 0, br: 0 });
         // Header inner highlight
-        g.fillStyle(0x1a1a4a, 0.4);
+        g.fillStyle(headerHighlight, 0.4);
         g.fillRoundedRect(px + 2, py + 2, PW - 4, 20, { tl: PANEL_RADIUS - 1, tr: PANEL_RADIUS - 1, bl: 0, br: 0 });
-        // Scan lines over header band — low-opacity horizontal lines
+        // Scan lines over header band
         for (let sl = 0; sl < 6; sl++) {
             g.lineStyle(0.5, 0xffffff, 0.03);
             g.lineBetween(px + PANEL_RADIUS, py + 6 + sl * 7, px + PW - PANEL_RADIUS, py + 6 + sl * 7);
         }
-        // Amber/gold gradient simulation — draw faint colored overlays at different vertical bands
+        // Amber/gold gradient simulation
         g.fillStyle(0xff9900, 0.04);
         g.fillRoundedRect(px + PANEL_RADIUS - 2, py + 2, PW - (PANEL_RADIUS - 2) * 2, 26, { tl: PANEL_RADIUS - 1, tr: PANEL_RADIUS - 1, bl: 0, br: 0 });
         g.fillStyle(0xffcc44, 0.03);
         g.fillRoundedRect(px + PANEL_RADIUS - 2, py + 28, PW - (PANEL_RADIUS - 2) * 2, 22, { tl: 0, tr: 0, bl: 0, br: 0 });
 
         // Gold border
-        g.lineStyle(2, COL_SLOT_TRIM, 0.9);
+        g.lineStyle(2, trimColor, 0.9);
         g.strokeRoundedRect(px, py, PW, PH, PANEL_RADIUS);
         // Inner inset
-        g.lineStyle(1, COL_TRIM_DIM, 0.20);
+        g.lineStyle(1, innerTrimDim, 0.20);
         g.strokeRoundedRect(px + 3, py + 3, PW - 6, PH - 6, PANEL_RADIUS - 1);
         // Header divider
-        g.lineStyle(1.5, COL_TRIM, 0.5);
+        g.lineStyle(1.5, innerTrim, 0.5);
         g.lineBetween(px + 16, py + 52, px + PW - 16, py + 52);
     }
 
@@ -468,9 +468,15 @@ export class SlotsPanel {
         const maxGfx = this.scene.add.graphics();
         const drawMax = (hover: boolean): void => {
             maxGfx.clear();
-            maxGfx.fillStyle(hover ? 0x222248 : 0x18183c, 1);
+            const fill = hover
+                ? (this.isHighStakes ? 0x3a0c40 : 0x222248)
+                : (this.isHighStakes ? 0x200424 : 0x18183c);
+            const sc = hover
+                ? (this.isHighStakes ? 0xf6c855 : COL_TRIM)
+                : (this.isHighStakes ? 0x8a2090 : 0x4444aa);
+            maxGfx.fillStyle(fill, 1);
             maxGfx.fillRoundedRect(PW / 2 - 82, betAreaY - 13, 72, 26, 4);
-            maxGfx.lineStyle(1, hover ? COL_TRIM : 0x4444aa, 0.8);
+            maxGfx.lineStyle(1, sc, 0.8);
             maxGfx.strokeRoundedRect(PW / 2 - 82, betAreaY - 13, 72, 26, 4);
         };
         drawMax(false);
@@ -483,9 +489,9 @@ export class SlotsPanel {
         maxHit.on('pointerout',  () => { drawMax(false); maxLbl.setColor('#8888cc'); });
         maxHit.on('pointerdown', () => {
             const chips = GameState.get().chips;
-            let newBet = BET_OPTIONS[0];
-            for (let i = BET_OPTIONS.length - 1; i >= 0; i--) {
-                if (chips >= BET_OPTIONS[i]) { newBet = BET_OPTIONS[i]; break; }
+            let newBet = this.betOptions[0];
+            for (let i = this.betOptions.length - 1; i >= 0; i--) {
+                if (chips >= this.betOptions[i]) { newBet = this.betOptions[i]; break; }
             }
             this.currentBet = newBet;
             this.updateBetDisplay();
@@ -495,18 +501,26 @@ export class SlotsPanel {
         // Bet amount buttons
         const btnW = 56;
         const btnH = 30;
-        const total = BET_OPTIONS.length * btnW + (BET_OPTIONS.length - 1) * 8;
+        const total = this.betOptions.length * btnW + (this.betOptions.length - 1) * 8;
         const startX = -total / 2 + btnW / 2;
         const btnY = betAreaY + 24;
 
-        BET_OPTIONS.forEach((amount, i) => {
+        this.betOptions.forEach((amount, i) => {
             const bx = startX + i * (btnW + 8);
             const gfx = this.scene.add.graphics();
 
             const drawBtn = (selected: boolean, canAfford: boolean): void => {
                 gfx.clear();
-                const fill = selected ? 0x2a2a60 : canAfford ? 0x18183c : 0x10101e;
-                const sc   = selected ? COL_SLOT_TRIM : canAfford ? 0x444488 : 0x282820;
+                const fill = selected
+                    ? (this.isHighStakes ? 0x4a0e4f : 0x2a2a60)
+                    : canAfford
+                        ? (this.isHighStakes ? 0x240828 : 0x18183c)
+                        : (this.isHighStakes ? 0x100412 : 0x10101e);
+                const sc = selected
+                    ? (this.isHighStakes ? 0xf6c855 : COL_SLOT_TRIM)
+                    : canAfford
+                        ? (this.isHighStakes ? 0x8a2090 : 0x444488)
+                        : (this.isHighStakes ? 0x300c35 : 0x282820);
                 const sa   = selected ? 1 : canAfford ? 0.6 : 0.3;
                 gfx.fillStyle(fill, 1);
                 gfx.fillRoundedRect(bx - btnW / 2, btnY - btnH / 2, btnW, btnH, 4);
@@ -579,18 +593,26 @@ export class SlotsPanel {
         g.clear();
 
         const fills: Record<typeof state, number> = {
-            idle: 0x2e1a58, hover: 0x4a2a88, press: 0x1e0e3a, spinning: 0x1a1238,
+            idle: this.isHighStakes ? 0x4a0e4f : 0x2e1a58,
+            hover: this.isHighStakes ? 0x6e1b75 : 0x4a2a88,
+            press: this.isHighStakes ? 0x2d0532 : 0x1e0e3a,
+            spinning: this.isHighStakes ? 0x240828 : 0x1a1238,
         };
         const strokeC: Record<typeof state, number> = {
-            idle: COL_SLOT_TRIM, hover: COL_TRIM_LIGHT, press: COL_TRIM_DIM, spinning: 0x443366,
+            idle: this.isHighStakes ? 0xf6c855 : COL_SLOT_TRIM,
+            hover: this.isHighStakes ? 0xffe885 : COL_TRIM_LIGHT,
+            press: this.isHighStakes ? 0xcba84a : COL_TRIM_DIM,
+            spinning: this.isHighStakes ? 0x5a1860 : 0x443366,
         };
         const strokeA: Record<typeof state, number> = {
             idle: 0.85, hover: 1, press: 0.7, spinning: 0.4,
         };
 
+        const glowColor = this.isHighStakes ? 0xf6c855 : COL_TRIM;
+
         // Outer glow on hover
         if (state === 'hover') {
-            g.lineStyle(8, COL_TRIM, 0.08);
+            g.lineStyle(8, glowColor, 0.08);
             g.strokeRoundedRect(-btnW / 2 - 3, btnY - btnH / 2 - 3, btnW + 6, btnH + 6, r + 3);
         }
         // Shadow
@@ -620,7 +642,7 @@ export class SlotsPanel {
         }
         // Mid glow on hover
         if (state === 'hover') {
-            g.lineStyle(3, COL_TRIM, 0.15);
+            g.lineStyle(3, glowColor, 0.15);
             g.strokeRoundedRect(-btnW / 2 - 1, btnY - btnH / 2 - 1, btnW + 2, btnH + 2, r + 1);
         }
     }
@@ -665,16 +687,18 @@ export class SlotsPanel {
 
     // ── Draw helpers ──────────────────────────────────────────────────────────
 
-    private drawPayLine(active: boolean): void {
+    private drawPayLine(active: boolean, customColor?: number): void {
         const g = this.payLineGfx;
         g.clear();
         if (active) {
+            const glowCol = customColor ?? COL_TRIM_LIGHT;
+            const coreCol = customColor !== undefined ? customColor : 0xffffff;
             // Win celebration — bright visible payline with outer glow
-            g.lineStyle(8, COL_TRIM_LIGHT, 0.15);
+            g.lineStyle(8, glowCol, 0.15);
             g.lineBetween(-175, -26, 175, -26);
-            g.lineStyle(4, COL_TRIM_LIGHT, 0.35);
+            g.lineStyle(4, glowCol, 0.35);
             g.lineBetween(-175, -26, 175, -26);
-            g.lineStyle(2, 0xffffff, 0.9);
+            g.lineStyle(2, coreCol, 0.9);
             g.lineBetween(-175, -26, 175, -26);
         } else {
             g.lineStyle(1.5, COL_SLOT_TRIM, 0.3);
@@ -703,19 +727,37 @@ export class SlotsPanel {
         const chips = GameState.get().chips;
         this.betBtns.forEach(({ gfx, label, amount }) => {
             const sel  = this.currentBet === amount;
-            const can  = chips >= amount;
+            const can  = chips >= amount || this.freeSpins > 0;
             const bx   = label.x;
             const by   = label.y;
             const bw   = 56;
             const bh   = 30;
             gfx.clear();
-            gfx.fillStyle(sel ? 0x2a2a60 : can ? 0x18183c : 0x10101e, 1);
+            const fill = sel
+                ? (this.isHighStakes ? 0x4a0e4f : 0x2a2a60)
+                : can
+                    ? (this.isHighStakes ? 0x240828 : 0x18183c)
+                    : (this.isHighStakes ? 0x100412 : 0x10101e);
+            const sc = sel
+                ? (this.isHighStakes ? 0xf6c855 : COL_SLOT_TRIM)
+                : can
+                    ? (this.isHighStakes ? 0x8a2090 : 0x444488)
+                    : (this.isHighStakes ? 0x300c35 : 0x282820);
+            const sa = sel ? 1 : can ? 0.6 : 0.3;
+            gfx.fillStyle(fill, 1);
             gfx.fillRoundedRect(bx - bw / 2, by - bh / 2, bw, bh, 4);
-            gfx.lineStyle(sel ? 1.5 : 1, sel ? COL_SLOT_TRIM : can ? 0x444488 : 0x282820, sel ? 1 : can ? 0.6 : 0.3);
+            gfx.lineStyle(sel ? 1.5 : 1, sc, sa);
             gfx.strokeRoundedRect(bx - bw / 2, by - bh / 2, bw, bh, 4);
             label.setColor(sel ? '#c9a84c' : can ? '#8888bb' : '#443344');
         });
-        this.betText.setText(`Bet: ${this.currentBet} ◈`);
+        if (this.freeSpins > 0) {
+            this.betText.setText(`FREE SPINS: ${this.freeSpins} left! (2x)`).setColor('#e0c060');
+        } else {
+            this.betText.setText(`Bet: ${this.currentBet} ◈`).setColor('#9090cc');
+        }
+        if (this.spinState === 'idle') {
+            this.spinBtnLabel.setText(this.freeSpins > 0 ? 'FREE SPIN' : 'SPIN');
+        }
     }
 
     // ── Spin logic ────────────────────────────────────────────────────────────
@@ -723,15 +765,22 @@ export class SlotsPanel {
     private spin(): void {
         if (this.spinState !== 'idle') return;
 
+        const isFreeSpin = this.freeSpins > 0;
+        this.wasFreeSpin = isFreeSpin;
         const chips = GameState.get().chips;
-        if (chips < this.currentBet) {
+        if (!isFreeSpin && chips < this.currentBet) {
             this.showResult(`Need ${this.currentBet - chips} more chips!`, '#e74c3c');
             return;
         }
 
-        // Determine all three final symbols BEFORE animation begins.
-        // (Real slot machines pre-compute outcomes before reels spin.)
-        const finalSymbols = [weightedRandom(), weightedRandom(), weightedRandom()];
+        let finalSymbols: string[];
+        if (GameState.hasBuff('guaranteedSlotsWin')) {
+            const winSym = weightedRandom();
+            finalSymbols = [winSym, winSym, winSym];
+            GameState.consumeBuff('guaranteedSlotsWin');
+        } else {
+            finalSymbols = [weightedRandom(), weightedRandom(), weightedRandom()];
+        }
 
         // Clear stale timer refs
         this.spinTimers = [];
@@ -739,9 +788,19 @@ export class SlotsPanel {
         this.reelSpinTweens.forEach(t => { if (t && t.isPlaying()) t.stop(); });
         this.reelSpinTweens = [null, null, null];
 
-        GameState.addChips(-this.currentBet);
+        if (isFreeSpin) {
+            this.freeSpins--;
+            this.updateBetDisplay();
+        } else {
+            GameState.addChips(-this.currentBet);
+            GameState.consumeBuff('slotsLuck');
+        }
+
+        SoundManager.playClick();   // coin-drop feedback on wager
         this.totalSpins++;
-        this.totalWagered += this.currentBet;
+        this.totalWagered += isFreeSpin ? 0 : this.currentBet;
+        GameState.recordStat('slotsSpins', 1);
+        GameState.recordStat('slotsWagered', isFreeSpin ? 0 : this.currentBet);
         this.updateChipsDisplay();
 
         this.spinState = 'spinning';
@@ -754,8 +813,14 @@ export class SlotsPanel {
         SoundManager.playSlotSpin();
 
         const { STRIP_LENGTH, SYMBOL_H } = this;
-        // Reel 0 stops first (620 ms), reel 1 second (1080 ms), reel 2 last (1540 ms)
-        const stopDelays = [620, 1080, 1540];
+        // Reel 0 stops first (720 ms), reel 1 second (1280 ms), reel 2 last (1840 ms)
+        // Stretched slightly to allow anticipation and high-speed spin appreciation
+        const stopDelays = [720, 1280, 1840];
+        
+        // Near-miss tension! If first two symbols match and are premium, spin 3rd reel longer
+        if (finalSymbols[0] === finalSymbols[1] && (PAYOUTS[finalSymbols[0]] ?? 0) >= 6) {
+            stopDelays[2] = 2800; // Extra tension delay for the 3rd reel!
+        }
         // Total scroll distance = (STRIP_LENGTH-1) * SYMBOL_H
         const totalTravel = (STRIP_LENGTH - 1) * SYMBOL_H;
 
@@ -773,33 +838,42 @@ export class SlotsPanel {
             // Reset strip to top (symbol[0] visible at centre of window)
             this.reelStrips[i].setY(0);
 
-            // Tween strip.y from 0 → totalTravel.
-            // Power3.easeOut: starts fast (simulates high momentum), decelerates to a
-            // clean stop with symbol[N-1] perfectly centred in the slot window.
+            // 1. Anticipation nudge: pull the reel up slightly first
             const reelIdx = i;
-            const spinTween = this.scene.tweens.add({
+            this.scene.tweens.add({
                 targets: this.reelStrips[i],
-                y: totalTravel,
-                duration: stopDelays[i],
-                ease: 'Power3.easeOut',
+                y: -20,
+                duration: 160 + i * 40, // Staggered start nudge
+                ease: 'Quad.easeIn',
                 onComplete: () => {
                     if (this.closed) return;
-                    this.reelValues[reelIdx] = finalSymbols[reelIdx];
+                    
+                    // 2. High-speed spin down with overshoot and settle (Back.easeOut)
+                    const spinTween = this.scene.tweens.add({
+                        targets: this.reelStrips[reelIdx],
+                        y: totalTravel,
+                        duration: stopDelays[reelIdx],
+                        ease: 'Back.easeOut',
+                        onComplete: () => {
+                            if (this.closed) return;
+                            this.reelValues[reelIdx] = finalSymbols[reelIdx];
 
-                    // Bounce scale on landing symbol
-                    this.scene.tweens.add({
-                        targets: symbols[STRIP_LENGTH - 1],
-                        scaleX: 1.14, scaleY: 1.14,
-                        yoyo: true, duration: 80, ease: 'Quad.easeOut',
+                            // Bounce scale on landing symbol
+                            this.scene.tweens.add({
+                                targets: symbols[STRIP_LENGTH - 1],
+                                scaleX: 1.16, scaleY: 1.16,
+                                yoyo: true, duration: 100, ease: 'Quad.easeOut',
+                            });
+
+                            SoundManager.playReelStop(reelIdx);
+
+                            this.spinDone[reelIdx] = true;
+                            if (this.spinDone.every(d => d)) this.evalResult();
+                        },
                     });
-
-                    SoundManager.playReelStop(reelIdx);
-
-                    this.spinDone[reelIdx] = true;
-                    if (this.spinDone.every(d => d)) this.evalResult();
-                },
+                    this.reelSpinTweens[reelIdx] = spinTween;
+                }
             });
-            this.reelSpinTweens[i] = spinTween;
         }
     }
 
@@ -811,40 +885,37 @@ export class SlotsPanel {
         this.spinTimers = [];
 
         const [a, b, c] = this.reelValues;
-        let payout = 0;
+        const res: SpinResult = evaluateSpin(this.reelValues, this.currentBet, this.wasFreeSpin);
+        
+        let payout = res.payout;
+        let jackpot = res.isJackpot;
         let msg    = '';
         let msgCol = '#c9a84c';
-        let jackpot = false;
+
+        if (res.addedSpins > 0) {
+            this.freeSpins += res.addedSpins;
+            msg = `★ SCATTER! +${res.addedSpins} Free Spins! ★\n`;
+            msgCol = '#e0c060';
+            this.updateBetDisplay();
+        }
 
         // ── Three of a kind ───────────────────────────────────────────────────
-        if (a === b && b === c) {
-            const mult = PAYOUTS[a] ?? 2;
-            payout  = this.currentBet * mult;
-            jackpot = a === '7️⃣';
-            msg     = jackpot ? `★ JACKPOT!  7️⃣×3  +${payout}◈ ★` : `3×${a}  +${payout}◈`;
+        if (res.isJackpot || (res.isWin && a === b && b === c && a !== '🎰')) {
+            msg     += jackpot ? `★ JACKPOT!  7️⃣×3  +${payout}◈ ★` : `3×${a}  +${payout}◈`;
             msgCol  = '#2ecc71';
-        } else if (a === b || b === c || a === c) {
-            // ── Two of a kind ─────────────────────────────────────────────────
-            const cherryPair =
-                (a === b && a === '🍒') || (b === c && b === '🍒') || (a === c && a === '🍒');
-            if (cherryPair) {
-                payout = this.currentBet * CHERRY_PAIR_PAYOUT;
-                msg    = `Cherry pair!  +${payout}◈`;
-                msgCol = '#f0a040';
-            } else {
-                // Near-miss: two premium symbols
-                const matchPair =
-                    a === b ? a : b === c ? b : a === c ? a : null;
-                const premiumMatch = matchPair !== null && (PAYOUTS[matchPair] ?? 0) >= 6;
-                if (premiumMatch) {
-                    msg    = `So close!  ${matchPair}${matchPair} and a ${matchPair === a ? c : a} — almost! 😤`;
-                    msgCol = '#f0a040';
-                } else {
-                    msg    = 'No match — try again';
-                    msgCol = '#666688';
-                }
-            }
-        } else {
+        } else if (res.isCherryPair) {
+            msg    += `Cherry pair!  +${payout}◈`;
+            msgCol = msg === '' ? '#f0a040' : msgCol;
+        } else if (res.nearMissSymbol) {
+            const matchPair = res.nearMissSymbol;
+            msg    = `So close!  ${matchPair}${matchPair} and a ${matchPair === a ? c : a} — almost! 😤`;
+            msgCol = '#f0a040';
+            // Near-miss payline flash — amber pulse
+            this.drawPayLine(true, 0xff8800);
+            this.scene.time.delayedCall(400, () => {
+                if (!this.closed) this.drawPayLine(false);
+            });
+        } else if (res.scatters < 2) {
             msg    = 'No match — try again';
             msgCol = '#666688';
         }
@@ -854,6 +925,10 @@ export class SlotsPanel {
             this.winStreak++;
             if (this.winStreak > this.maxWinStreak) this.maxWinStreak = this.winStreak;
             GameState.addChips(payout);
+            GameState.recordStat('slotsWon', payout);
+            GameState.recordMaxStat('slotsMaxWin', payout);
+            GameState.recordStat('slotsWinStreak', 1);
+            GameState.recordMaxStat('slotsMaxWinStreak', GameState.get().stats.slotsWinStreak);
             this.updateChipsDisplay();
             this.showChipDelta(`+${payout}◈`, '#2ecc71');
             this.drawPayLine(true);
@@ -885,6 +960,12 @@ export class SlotsPanel {
         } else {
             this.winStreak = 0;
             this.showChipDelta(`-${this.currentBet}◈`, '#e74c3c');
+            GameState.update({
+                stats: {
+                    ...GameState.get().stats,
+                    slotsWinStreak: 0
+                }
+            });
         }
 
         this.showResult(msg, msgCol);
@@ -892,6 +973,7 @@ export class SlotsPanel {
 
         const idleTimer = this.scene.time.delayedCall(500, () => {
             if (this.closed) return;
+            this.spinLocked = false;
             this.spinState = 'idle';
             this.drawSpinButton('idle');
             this.spinBtnLabel.setColor('#c9a84c');
@@ -899,6 +981,8 @@ export class SlotsPanel {
             this.checkLowChips();
         });
         this.spinTimers.push(idleTimer);
+        // Set spinLocked immediately so the SPACE key can't fire during the 500ms
+        this.spinLocked = true;
     }
 
     // ── UI helpers ────────────────────────────────────────────────────────────
@@ -931,7 +1015,21 @@ export class SlotsPanel {
             g.fillEllipse(0, ry, 200, 32);
             g.lineStyle(1, glowColor, 0.25);
             g.strokeEllipse(0, ry, 210, 34);
+            
             g.setVisible(true);
+            g.setAlpha(1.0);
+
+            // Breathe the win glow halo
+            this.scene.tweens.add({
+                targets: g,
+                alpha: 0.35,
+                yoyo: true,
+                repeat: 3,
+                duration: 250
+            });
+
+            // Trigger sparkle particle burst
+            this.spawnWinParticles();
         } else {
             g.setVisible(false);
         }
@@ -943,16 +1041,50 @@ export class SlotsPanel {
         });
     }
 
+    private spawnWinParticles(count: number = 26): void {
+        if (this.closed) return;
+        const colors = [0xffd700, 0xffe0a0, 0xffffff, 0xc9a84c];
+        for (let i = 0; i < count; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const dist = 30 + Math.random() * 80;
+            const startX = (Math.random() - 0.5) * 160;
+            const startY = this.resultText.y + (Math.random() - 0.5) * 10;
+
+            const p = this.scene.add.graphics();
+            const col = Phaser.Utils.Array.GetRandom(colors);
+            p.fillStyle(col, 0.95);
+            p.fillCircle(0, 0, 1.5 + Math.random() * 2);
+            p.setPosition(startX, startY);
+            this.container.add(p);
+
+            this.scene.tweens.add({
+                targets: p,
+                x: startX + Math.cos(angle) * dist,
+                y: startY + Math.sin(angle) * dist - (10 + Math.random() * 20),
+                alpha: 0,
+                scaleX: 0.1,
+                scaleY: 0.1,
+                duration: 600 + Math.random() * 450,
+                ease: 'Cubic.easeOut',
+                onComplete: () => {
+                    if (!this.closed && p && p.destroy) {
+                        p.destroy();
+                    }
+                }
+            });
+        }
+    }
+
     private checkLowChips(): void {
         const chips = GameState.get().chips;
         if (chips > 0 && chips < this.currentBet) {
-            const affordable = BET_OPTIONS.filter(b => b <= chips);
+            const affordable = this.betOptions.filter(b => b <= chips);
             this.currentBet = affordable.length > 0
                 ? affordable[affordable.length - 1]
-                : BET_OPTIONS[0];
+                : this.betOptions[0];
             this.updateBetDisplay();
         }
-        if (chips < BET_OPTIONS[0]) this.showFreeChipsOffer();
+        if (chips < this.betOptions[0]) this.showFreeChipsOffer();
     }
 
     private showFreeChipsOffer(): void {
@@ -978,7 +1110,7 @@ export class SlotsPanel {
         hit.on('pointerout',  () => draw(false));
         hit.on('pointerdown', () => {
             GameState.addChips(500);
-            this.currentBet = 25;
+            this.currentBet = this.betOptions[1];
             this.updateChipsDisplay();
             this.updateBetDisplay();
             this.updateStatsDisplay();
@@ -999,6 +1131,7 @@ export class SlotsPanel {
         this.closed = true;
         // Cancel any active spin tweens
         this.reelSpinTweens.forEach(t => { if (t && t.isPlaying()) t.stop(); });
+        this.reelStrips.forEach(strip => { this.scene.tweens.killTweensOf(strip); });
         this.spinTimers.forEach(t => t.remove());
         // Destroy mask graphics — they live outside the container and must be
         // cleaned up explicitly.  Guard with active check as a safety net.

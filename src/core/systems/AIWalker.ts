@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import {
     AVATAR_SPEED, AVATAR_SIZE, WORLD_W, WORLD_H,
-    DEPTH_AVATAR_BASE, DEPTH_SHADOW,
+    DEPTH_AVATAR_BASE, DEPTH_SHADOW, FONT,
 } from '../../game/constants';
 
 interface Blocker {
@@ -32,6 +32,21 @@ const WAYPOINTS: [number, number][] = [
 export const AI_NAMES  = ['Alex', 'Jamie', 'Morgan', 'Riley', 'Casey', 'Jordan', 'Taylor', 'Sam'];
 export const AI_COLORS = [0x4488cc, 0xcc5544, 0x44cc88, 0xcc8844, 0x9955cc, 0x44b844, 0xcc4488, 0x66aabb];
 
+const WALK_COMMENTS = [
+    "Lady luck, where are you? 🍀",
+    "I need a cold drink from the bar! 🍹",
+    "Let's see if the slots are hot! 🎰",
+    "Pocket Aces is the dream... ♠",
+    "Double down on 11! 🃏",
+    "Red or black... roulette is calling! 🎡",
+    "Bingo blackout is so close! 🎱",
+    "I'm feeling lucky! ✨",
+    "Time to tip the bartender. 💵",
+    "Look at those showgirls, gorgeous! 💃",
+    "Let's bet on the underdog horse! 🏇",
+    "Almost hit a Plinko 10x! 🎯",
+];
+
 export class AIWalker {
     private scene:    Phaser.Scene;
     private aura!:    Phaser.GameObjects.Ellipse;
@@ -40,6 +55,9 @@ export class AIWalker {
     private shadow!:  Phaser.GameObjects.Ellipse;
     private nameTag!: Phaser.GameObjects.Text;
     private blockers: Blocker[] = [];
+    private activeBubble: Phaser.GameObjects.Container | null = null;
+    private bubbleTimer: Phaser.Time.TimerEvent | null = null;
+    private bubbleOffsetY: number = 0;
 
     x: number;
     y: number;
@@ -108,7 +126,7 @@ export class AIWalker {
 
         this.nameTag = this.scene.add
             .text(this.x, this.y - r * 2.2, labelName, {
-                fontFamily: 'monospace',
+                fontFamily: FONT,
                 fontSize:   '10px',
                 color:      nameColorStr,
                 fontStyle:  isBold ? 'bold' : 'normal',
@@ -119,6 +137,10 @@ export class AIWalker {
 
     addBlocker(b: Blocker): void {
         this.blockers.push(b);
+    }
+
+    setBlockers(blockers: Blocker[]): void {
+        this.blockers = [...blockers];
     }
 
     private resolveBlockers(nx: number, ny: number): { x: number; y: number } {
@@ -174,6 +196,9 @@ export class AIWalker {
         if (dist < 10) {
             this.pauseTimer = 600 + Math.random() * 2400;
             this.pickNewTarget();
+            if (Math.random() < 0.18) {
+                this.speakRandomComment();
+            }
             this.syncSprite();
             return;
         }
@@ -236,9 +261,99 @@ export class AIWalker {
         this.sprite.setDepth(depth);
         this.nameTag.setDepth(depth + 3);
         this.shadow.setDepth(depth - 5);
+
+        if (this.activeBubble) {
+            this.activeBubble.setPosition(this.x, this.y + this.bubbleOffsetY + bobY);
+            this.activeBubble.setDepth(depth + 10);
+        }
+    }
+
+    private speakRandomComment(): void {
+        if (this.activeBubble) {
+            this.activeBubble.destroy();
+            this.activeBubble = null;
+        }
+        if (this.bubbleTimer) {
+            this.bubbleTimer.remove();
+            this.bubbleTimer = null;
+        }
+
+        const comment = WALK_COMMENTS[Math.floor(Math.random() * WALK_COMMENTS.length)];
+        
+        const r = AVATAR_SIZE;
+        const text = this.scene.add.text(0, 0, comment, {
+            fontFamily: FONT,
+            fontSize: '9px',
+            color: '#0a0d14',
+            align: 'center',
+            wordWrap: { width: 110 }
+        }).setOrigin(0.5);
+
+        const bw = Math.max(60, text.width + 12);
+        const bh = text.height + 8;
+        const br = 4;
+
+        const bubbleGfx = this.scene.add.graphics();
+        // shadow
+        bubbleGfx.fillStyle(0x000000, 0.15);
+        bubbleGfx.fillRoundedRect(-bw / 2 + 1, -bh / 2 + 1, bw, bh, br);
+        // bubble
+        bubbleGfx.fillStyle(0xfcf8f2, 0.95);
+        bubbleGfx.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, br);
+        bubbleGfx.fillTriangle(0, bh / 2 + 4, -4, bh / 2 - 2, 4, bh / 2 - 2);
+        // border
+        bubbleGfx.lineStyle(1.0, 0x908070, 0.6);
+        bubbleGfx.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, br);
+
+        text.setPosition(0, -1);
+
+        this.bubbleOffsetY = -r * 2.2 - bh / 2 - 2;
+        const bx = this.x;
+        const by = this.y + this.bubbleOffsetY;
+
+        const depth = DEPTH_AVATAR_BASE + this.y * 0.1;
+
+        this.activeBubble = this.scene.add.container(bx, by, [bubbleGfx, text])
+            .setDepth(depth + 10)
+            .setScale(0);
+
+        this.scene.tweens.add({
+            targets: this.activeBubble,
+            scaleX: 1,
+            scaleY: 1,
+            duration: 150,
+            ease: 'Back.easeOut'
+        });
+
+        this.bubbleTimer = this.scene.time.delayedCall(2500, () => {
+            this.fadeBubble();
+        });
+    }
+
+    private fadeBubble(): void {
+        if (!this.activeBubble) return;
+        this.scene.tweens.add({
+            targets: this.activeBubble,
+            alpha: 0,
+            scaleX: 0.8,
+            scaleY: 0.8,
+            duration: 200,
+            onComplete: () => {
+                if (this.activeBubble) {
+                    this.activeBubble.destroy();
+                    this.activeBubble = null;
+                }
+            }
+        });
     }
 
     destroy(): void {
+        if (this.activeBubble) {
+            this.activeBubble.destroy();
+        }
+        if (this.bubbleTimer) {
+            this.bubbleTimer.remove();
+        }
         this.shadow.destroy();
         this.aura.destroy();
         this.sprite.destroy();

@@ -9,14 +9,18 @@
         "preview": "vite preview --config vite/config.prod.mjs",
         "dev:full": "npm run dev --prefix slot-city",
         "dev:client": "npm run dev --prefix slot-city/apps/game-client",
-        "test": "npm run test --prefix slot-city"
+        "test": "npm run test --prefix slot-city",
+        "test:client": "jest --config jest.config.client.js"
     },
     "devDependencies": {
+        "@types/jest": "^30.0.0",
+        "jest": "^30.4.2",
+        "ts-jest": "^29.4.11",
         "typescript": "~5.7.2",
-        "vite": "^6.3.1"
+        "vite": "^6.4.3"
     },
     "dependencies": {
         "phaser": "^3.90.0",
-        "terser": "^5.39.0"
+        "terser": "^5.48.0"
     }
 }

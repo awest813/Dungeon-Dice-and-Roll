@@ -41,11 +41,12 @@ export function isBust(cards: Card[]): boolean { return handValue(cards) > 21; }
  */
 export function isSoftHand(cards: Card[]): boolean {
     if (!cards.some(c => c.rank === 14)) return false;
-    // Sum treating all Aces as 11; if ≤ 21 at least one Ace is still 11.
-    const sumAll11 = cards.reduce(
-        (s, c) => s + (c.rank === 14 ? 11 : bjRankValue(c.rank)), 0,
+    // A hand is soft if treating all Aces as 1 gives a sum <= 11,
+    // meaning we can safely upgrade exactly one Ace from 1 to 11.
+    const sum1 = cards.reduce(
+        (s, c) => s + (c.rank === 14 ? 1 : bjRankValue(c.rank)), 0,
     );
-    return sumAll11 <= 21;
+    return sum1 <= 11;
 }
 
 // ── State types ───────────────────────────────────────────────────────────────

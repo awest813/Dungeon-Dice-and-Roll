@@ -24,6 +24,10 @@ export class PreloadScene extends Phaser.Scene {
     private spotlightsGfx!: Phaser.GameObjects.Graphics;
     private spotlightAngle: number = 0;
     private titleGlowText!: Phaser.GameObjects.Text;
+    
+    private selectedSkinKey: string = 'avatar_player';
+    private skinButtonsGfx!: Phaser.GameObjects.Graphics;
+    private skinImages: Phaser.GameObjects.Image[] = [];
 
     constructor() { super({ key: 'PreloadScene' }); }
 
@@ -350,6 +354,7 @@ export class PreloadScene extends Phaser.Scene {
         this.load.image('avatar_ai_male', 'assets/avatars/avatar_ai_male.png');
         this.load.image('avatar_ai_female', 'assets/avatars/avatar_ai_female.png');
         this.load.image('avatar_ai_vip', 'assets/avatars/avatar_ai_vip.png');
+        this.load.image('avatar_showgirl', 'assets/avatars/avatar_showgirl.png');
 
         // Asset loading progress bar — soft glow behind narrow bar
         const barBg = this.add.graphics();
@@ -405,10 +410,103 @@ export class PreloadScene extends Phaser.Scene {
             ease: 'Sine.easeInOut'
         });
 
-        // ── Name entry section ────────────────────────────────────────────
+        // ── Avatar Skin Selection section (Left Column) ──────────────────────
+        const cxLeft = cx - 160;
         const inputSectionY = cy + 44;
+        
+        this.add.text(cxLeft, inputSectionY, 'SELECT YOUR COSMETIC SKIN', {
+            fontFamily: FONT, fontSize: '10px', color: '#7090a0', fontStyle: 'bold',
+            letterSpacing: 4,
+        }).setOrigin(0.5);
 
-        this.add.text(cx, inputSectionY, 'CHOOSE YOUR PLAYER NAME', {
+        this.skinButtonsGfx = this.add.graphics();
+        this.selectedSkinKey = 'avatar_player';
+        GameState.update({ avatarTextureKey: 'avatar_player' });
+
+        const skins = [
+            { key: 'avatar_player', label: 'Classic' },
+            { key: 'avatar_ai_male', label: 'Male' },
+            { key: 'avatar_ai_female', label: 'Female' },
+            { key: 'avatar_ai_vip', label: 'VIP' }
+        ];
+
+        const selectY = inputSectionY + 42;
+        const spacing = 58;
+
+        skins.forEach((s, idx) => {
+            const bx = cxLeft - 87 + idx * spacing;
+
+            // Avatar sprite image
+            const img = this.add.image(bx, selectY + 3, s.key);
+            img.setOrigin(0.5, 0.5);
+            img.setDisplaySize(25, 36);
+            this.skinImages.push(img);
+
+            // Small text label underneath avatar
+            const labelText = this.add.text(bx, selectY + 28, s.label, {
+                fontFamily: FONT, fontSize: '8px', color: '#4a6070', fontStyle: 'bold',
+            }).setOrigin(0.5);
+
+            // Invisible interactive click zone
+            const hit = this.add.circle(bx, selectY, 22, 0x000000, 0)
+                .setInteractive({ useHandCursor: true });
+
+            hit.on('pointerover', () => {
+                if (this.selectedSkinKey !== s.key) {
+                    labelText.setColor('#c9a84c');
+                    this.tweens.add({
+                        targets: img,
+                        scaleX: 1.15,
+                        scaleY: 1.15,
+                        duration: 120,
+                    });
+                }
+            });
+
+            hit.on('pointerout', () => {
+                labelText.setColor(this.selectedSkinKey === s.key ? '#ffd700' : '#4a6070');
+                this.tweens.add({
+                    targets: img,
+                    scaleX: 1.0,
+                    scaleY: 1.0,
+                    duration: 120,
+                });
+            });
+
+            hit.on('pointerdown', () => {
+                this.selectedSkinKey = s.key;
+                GameState.update({ avatarTextureKey: s.key });
+                this.drawAvatarSelector();
+
+                // Reset all text colors
+                skins.forEach((otherSkin, otherIdx) => {
+                    const otherLabel = this.children.list.find(
+                        c => c instanceof Phaser.GameObjects.Text && 
+                             c.x === cxLeft - 87 + otherIdx * spacing && 
+                             c.y === selectY + 28
+                    ) as Phaser.GameObjects.Text;
+                    if (otherLabel) {
+                        otherLabel.setColor(otherSkin.key === s.key ? '#ffd700' : '#4a6070');
+                    }
+                });
+
+                // Play scale bounce pop on selected image
+                this.tweens.add({
+                    targets: img,
+                    scaleX: [1.35, 1],
+                    scaleY: [1.35, 1],
+                    duration: 200,
+                    ease: 'Back.easeOut'
+                });
+            });
+        });
+
+        this.drawAvatarSelector();
+
+        // ── Name entry section (Right Column) ─────────────────────────────
+        const cxRight = cx + 160;
+
+        this.add.text(cxRight, inputSectionY, 'CHOOSE YOUR PLAYER NAME', {
             fontFamily: FONT, fontSize: '10px', color: '#7090a0', fontStyle: 'bold',
             letterSpacing: 4,
         }).setOrigin(0.5);
@@ -418,12 +516,12 @@ export class PreloadScene extends Phaser.Scene {
         this.drawInputBorder(true);
 
         // Name text inside input
-        this.nameDisplay = this.add.text(cx, inputSectionY + 28, 'Guest▌', {
+        this.nameDisplay = this.add.text(cxRight, inputSectionY + 28, 'Guest▌', {
             fontFamily: FONT, fontSize: '17px', color: '#c9a84c',
         }).setOrigin(0.5);
 
         // Invisible hit area for click to activate
-        const inputHit = this.add.rectangle(cx, inputSectionY + 28, 320, 36, 0x000000, 0)
+        const inputHit = this.add.rectangle(cxRight, inputSectionY + 28, 320, 36, 0x000000, 0)
             .setInteractive({ useHandCursor: true });
         inputHit.on('pointerdown', () => {
             this.inputActive = true;
@@ -448,12 +546,12 @@ export class PreloadScene extends Phaser.Scene {
         this.startBtnGfx = this.add.graphics();
         this.drawStartButton(false);
 
-        this.startBtnLabel = this.add.text(cx, btnY, 'ENTER CASINO  ▶', {
+        this.startBtnLabel = this.add.text(cxRight, btnY, 'ENTER CASINO  ▶', {
             fontFamily: FONT, fontSize: '14px', color: '#c8e8c8', fontStyle: 'bold',
         }).setOrigin(0.5);
 
         // Invisible hit area
-        this.startBtnHit = this.add.rectangle(cx, btnY, btnW, btnH, 0x000000, 0)
+        this.startBtnHit = this.add.rectangle(cxRight, btnY, btnW, btnH, 0x000000, 0)
             .setInteractive({ useHandCursor: true });
 
         this.startBtnHit.on('pointerover', () => {
@@ -606,8 +704,48 @@ export class PreloadScene extends Phaser.Scene {
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    private drawInputBorder(focused: boolean): void {
+    private drawAvatarSelector(): void {
         const cx = GAME_WIDTH / 2;
+        const cxLeft = cx - 160;
+        const cy = GAME_HEIGHT / 2;
+        const inputSectionY = cy + 44;
+        const selectY = inputSectionY + 42;
+        const spacing = 58;
+
+        const g = this.skinButtonsGfx;
+        g.clear();
+
+        const skins = [
+            { key: 'avatar_player', label: 'Classic' },
+            { key: 'avatar_ai_male', label: 'Male' },
+            { key: 'avatar_ai_female', label: 'Female' },
+            { key: 'avatar_ai_vip', label: 'VIP' }
+        ];
+
+        skins.forEach((s, idx) => {
+            const bx = cxLeft - 87 + idx * spacing;
+            const isSelected = s.key === this.selectedSkinKey;
+            
+            // Draw background circle
+            g.fillStyle(isSelected ? 0x142a20 : 0x0d1828, 1);
+            g.fillCircle(bx, selectY, 21);
+
+            // Draw border outline
+            const borderCol = isSelected ? COL_TRIM : COL_TRIM_DIM;
+            const borderAlpha = isSelected ? 0.95 : 0.25;
+            g.lineStyle(isSelected ? 2 : 1, borderCol, borderAlpha);
+            g.strokeCircle(bx, selectY, 21);
+
+            if (isSelected) {
+                // Outer glow ring
+                g.lineStyle(5, COL_TRIM, 0.08);
+                g.strokeCircle(bx, selectY, 23);
+            }
+        });
+    }
+
+    private drawInputBorder(focused: boolean): void {
+        const cx = GAME_WIDTH / 2 + 160;
         const cy = GAME_HEIGHT / 2;
         const inputSectionY = cy + 44;
         const g = this.inputBorderGfx;
@@ -643,7 +781,7 @@ export class PreloadScene extends Phaser.Scene {
     }
 
     private drawStartButton(hover: boolean): void {
-        const cx = GAME_WIDTH / 2;
+        const cx = GAME_WIDTH / 2 + 160;
         const cy = GAME_HEIGHT / 2;
         const inputSectionY = cy + 44;
         const btnY = inputSectionY + 74;

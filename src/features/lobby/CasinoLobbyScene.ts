@@ -9,7 +9,7 @@ import {
     COL_UI_BG, COL_UI_BG2, COL_UI_BORDER,
     COL_SKY_TOP, COL_SKY_MID, COL_SKY_GLOW, COL_RUNNER, COL_RUNNER_TRIM, COL_NEON_BLUE, COL_NEON_PINK,
     DEPTH_FLOOR, DEPTH_PROPS, DEPTH_FOREGROUND, DEPTH_HUD, DEPTH_OVERLAY,
-    ZONE_ENTRANCE, ZONE_SLOTS, ZONE_POKER, ZONE_BAR, ZONE_BLACKJACK, ZONE_ROULETTE, ZONE_PLINKO, ZONE_BINGO, ZONE_HORSES,
+    ZONE_ENTRANCE, ZONE_SLOTS, ZONE_POKER, ZONE_BAR, ZONE_BLACKJACK, ZONE_ROULETTE, ZONE_PLINKO, ZONE_BINGO, ZONE_HORSES, ZONE_VIP,
     FONT, ANIM_SLOW,
 } from '../../game/constants';
 import { GameState, Zone } from '../../core/state/GameState';
@@ -17,9 +17,11 @@ import { AvatarController } from '../../core/systems/AvatarController';
 import { AIWalker, AI_NAMES, AI_COLORS } from '../../core/systems/AIWalker';
 import { InteractionSystem } from '../../core/systems/InteractionSystem';
 import { SoundManager } from '../../core/systems/SoundManager';
+import { StationaryNPC } from '../../core/systems/StationaryNPC';
 import { HUD } from '../ui/HUD';
 import { Minimap } from '../ui/Minimap';
 import { SlotsPanel } from '../slots/SlotsPanel';
+import { ToastManager } from '../ui/ToastManager';
 import { BarPanel, resetBarSession } from '../bar/BarPanel';
 import { PokerPanel } from '../poker/PokerPanel';
 import { BlackjackPanel } from '../blackjack/BlackjackPanel';
@@ -27,18 +29,28 @@ import { RoulettePanel } from '../roulette/RoulettePanel';
 import { PlinkoPanel } from '../plinko/PlinkoPanel';
 import { BingoPanel } from '../bingo/BingoPanel';
 import { HorseRacePanel } from '../horserace/HorseRacePanel';
+import { ScratcherPanel } from '../scratchers/ScratcherPanel';
+import { EmoteRadialMenu } from '../ui/EmoteRadialMenu';
+import { StatsPanel } from '../ui/StatsPanel';
 
 export class CasinoLobbyScene extends Phaser.Scene {
     private avatar!:      AvatarController;
     private aiWalkers:    AIWalker[] = [];
+    private npcs:         StationaryNPC[] = [];
     private interaction!: InteractionSystem;
     private minimap!:     Minimap;
-    private activePanel:  'none' | 'slots' | 'bar' | 'poker' | 'blackjack' | 'roulette' | 'plinko' | 'bingo' | 'horses' = 'none';
+    private activePanel:  'none' | 'slots' | 'bar' | 'poker' | 'blackjack' | 'roulette' | 'plinko' | 'bingo' | 'horses' | 'scratchers' | 'menu' = 'none';
     private graphics!:    Phaser.GameObjects.Graphics;
     // Context hint bar
     private hintBg!:      Phaser.GameObjects.Rectangle;
     private hintText!:    Phaser.GameObjects.Text;
     private zoneFlashRect: Phaser.GameObjects.Rectangle | null = null;
+    private hud!:         HUD;
+
+    // Emote radial trigger key and overlay
+    private qKey!:        Phaser.Input.Keyboard.Key;
+    private radialMenu:   EmoteRadialMenu | null = null;
+    private vipUnlocked:  boolean = false;
 
     constructor() { super({ key: 'CasinoLobbyScene' }); }
 
@@ -79,9 +91,15 @@ export class CasinoLobbyScene extends Phaser.Scene {
         // Interaction system
         this.interaction = new InteractionSystem(this);
         this.registerHotspots();
+        this.spawnStationaryNPCs();
+
+        this.events.once('shutdown', () => {
+            this.npcs.forEach(npc => npc.destroy());
+            this.npcs = [];
+        });
 
         // HUD
-        new HUD(this);
+        this.hud = new HUD(this, () => this.openStatsMenu());
 
         // Minimap
         this.minimap = new Minimap(this);
@@ -89,9 +107,19 @@ export class CasinoLobbyScene extends Phaser.Scene {
         // Context-sensitive hint bar (bottom edge)
         this.buildHintBar();
 
+        // Emote radial trigger key register
+        this.qKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.Q);
+
         // Initialise sound engine on the first pointer-down (browser autoplay policy
         // requires a user gesture before creating / resuming an AudioContext).
         this.input.once('pointerdown', () => SoundManager.init());
+
+        // Click-to-move listener
+        this.input.on('pointerdown', (pointer: Phaser.Input.Pointer, gameObjects: Phaser.GameObjects.GameObject[]) => {
+            if (this.activePanel === 'none' && gameObjects.length === 0 && this.avatar.enabled) {
+                this.avatar.setTarget(pointer.worldX, pointer.worldY);
+            }
+        });
 
         // Welcome tutorial overlay
         this.showWelcomeBanner();
@@ -102,6 +130,29 @@ export class CasinoLobbyScene extends Phaser.Scene {
 
     update(_time: number, delta: number): void {
         if (this.activePanel !== 'none') return;
+
+        // Handle Emote Radial Menu overlay lifecycle
+        if (this.radialMenu) {
+            if (this.qKey.isUp) {
+                this.radialMenu.confirmSelection();
+                this.radialMenu = null;
+                this.avatar.enabled = true;
+            } else {
+                this.radialMenu.updateMenu(this.input.activePointer);
+                return; // Suppress movement/camera updates while choosing emotes
+            }
+        } else if (this.qKey.isDown) {
+            this.avatar.enabled = false;
+            this.radialMenu = new EmoteRadialMenu(
+                this,
+                GAME_WIDTH / 2,
+                GAME_HEIGHT / 2,
+                (emoji) => {
+                    this.avatar.playEmote(emoji);
+                }
+            );
+            return;
+        }
 
         this.avatar.update(delta);
 
@@ -259,6 +310,64 @@ export class CasinoLobbyScene extends Phaser.Scene {
             g.lineBetween(Math.max(24, d), 32, Math.min(WORLD_W - 24, d + WORLD_H), Math.min(WORLD_H - 24, 32 + WORLD_H));
             g.lineBetween(Math.max(24, WORLD_W - d - diagSpacing), 32, Math.min(WORLD_W - 24, WORLD_W - d), Math.min(WORLD_H - 24, 32 + WORLD_H));
         }
+
+        // === VIP Lounge Floor overlay ===
+        // Bottom-left corner: x from 24 to 280, y from 580 to 696
+        const vipCarpetX = 24;
+        const vipCarpetY = 580;
+        const vipCarpetW = 256;
+        const vipCarpetH = 116;
+        
+        // Dark purple velvet carpet fill
+        g.fillStyle(0x340a3a, 0.92);
+        g.fillRect(vipCarpetX, vipCarpetY, vipCarpetW, vipCarpetH);
+        
+        // Gold inner border
+        g.lineStyle(2, 0xf6c855, 0.85);
+        g.strokeRect(vipCarpetX, vipCarpetY, vipCarpetW, vipCarpetH);
+        
+        // Velvet ropes and brass stanchions along the top edge (y = 580)
+        // With a gap for entrance at x = 240 to 280 (so stanchions at x = 24, 80, 140, 200, 240)
+        const stanchionXs = [24, 80, 140, 200, 240];
+        stanchionXs.forEach(sx => {
+            // Draw red rope between stanchions
+            if (sx > 24) {
+                const prevX = stanchionXs[stanchionXs.indexOf(sx) - 1];
+                g.lineStyle(2.5, 0xb31010, 0.95);
+                g.beginPath();
+                const midX = (prevX + sx) / 2;
+                const midY = 580 + 8;
+                g.moveTo(prevX, 580);
+                const steps = 10;
+                for (let step = 1; step <= steps; step++) {
+                    const t = step / steps;
+                    const mt = 1 - t;
+                    const rx = mt * mt * prevX + 2 * mt * t * midX + t * t * sx;
+                    const ry = mt * mt * 580 + 2 * mt * t * midY + t * t * 580;
+                    g.lineTo(rx, ry);
+                }
+                g.strokePath();
+            }
+            
+            // Draw brass stanchion post
+            g.fillStyle(0xc9a84c, 1);
+            g.fillRect(sx - 2, 574, 4, 12);
+            g.fillCircle(sx, 574, 3.5);
+            g.fillStyle(0xffe080, 1);
+            g.fillCircle(sx - 1, 573, 1.2);
+            
+            // Shadow at base
+            g.fillStyle(0x000000, 0.35);
+            g.fillEllipse(sx, 586, 8, 3.5);
+        });
+
+        // Add a gold VIP Lounge label written on the floor carpet
+        this.add.text(vipCarpetX + vipCarpetW / 2, vipCarpetY + vipCarpetH / 2, '★ VIP LOUNGE ★', {
+            fontFamily: FONT,
+            fontSize: '11px',
+            color: '#f6c855',
+            fontStyle: 'bold',
+        }).setOrigin(0.5).setDepth(DEPTH_FLOOR + 2).setAlpha(0.65);
 
         // Light reflection pools below chandeliers
         const chandPos: Array<[number, number]> = [
@@ -436,6 +545,14 @@ export class CasinoLobbyScene extends Phaser.Scene {
         this.drawChandelier(WORLD_W / 2, 90);
         this.drawChandelier(200, 200);
         this.drawChandelier(760, 200);
+
+        // VIP High-Stakes Slot Machine
+        this.drawVipSlotMachine(80, 640);
+
+        // Interactivity Props
+        this.drawATM(400, WORLD_H - 100);
+        this.drawFountain(WORLD_W / 2, WORLD_H / 2 + 30);
+        this.drawJukebox(ZONE_BAR.x + 40, ZONE_BAR.y + ZONE_BAR.h - 40);
     }
 
     private drawSlotMachine(x: number, y: number): void {
@@ -537,6 +654,241 @@ export class CasinoLobbyScene extends Phaser.Scene {
             g2.fillStyle(ti % 2 === 0 ? 0xffb020 : 0x332200, 0.9);
             g2.fillCircle(x - 12 + ti * 6, y + 30, 2);
         }
+    }
+
+    private drawVipSlotMachine(x: number, y: number): void {
+        const depth = DEPTH_PROPS + y * 0.1;
+        const g2 = this.add.graphics().setDepth(depth);
+
+        // Shadow
+        g2.fillStyle(0x000000, 0.35);
+        g2.fillEllipse(x, y + 36, 52, 10);
+
+        // Main cabinet body — deep royal purple metallic
+        g2.fillStyle(0x1a051d, 1);
+        g2.fillRoundedRect(x - 24, y - 42, 48, 80, 5);
+
+        // Side panel highlights for 3D effect — purple glow
+        g2.fillStyle(0x3d0d44, 0.8);
+        g2.fillRoundedRect(x - 24, y - 42, 8, 80, { tl: 5, bl: 5, tr: 0, br: 0 });
+        g2.fillStyle(0x28052e, 0.8);
+        g2.fillRoundedRect(x + 16, y - 42, 8, 80, { tl: 0, bl: 0, tr: 5, br: 5 });
+
+        // Premium gold borders
+        g2.lineStyle(2, 0xf6c855, 1);
+        g2.strokeRoundedRect(x - 24, y - 42, 48, 80, 5);
+        g2.lineStyle(1, 0xffe885, 0.45);
+        g2.strokeRoundedRect(x - 22, y - 40, 44, 76, 4);
+
+        // Top marquee area
+        g2.fillStyle(0x2d0532, 1);
+        g2.fillRoundedRect(x - 21, y - 40, 42, 16, { tl: 3, tr: 3, bl: 0, br: 0 });
+        g2.lineStyle(1, 0xf6c855, 0.8);
+        g2.lineBetween(x - 18, y - 33, x + 18, y - 33);
+
+        // Marquee label
+        this.add.text(x, y - 36, '🏆 VIP 🏆', {
+            fontFamily: FONT, fontSize: '7px', color: '#f6c855', fontStyle: 'bold',
+        }).setOrigin(0.5).setDepth(depth + 1);
+
+        // Screen outer bezel
+        g2.fillStyle(0x0a0412, 1);
+        g2.fillRoundedRect(x - 18, y - 24, 36, 30, 3);
+        // Screen inner glass
+        g2.fillStyle(0x14051b, 1);
+        g2.fillRoundedRect(x - 17, y - 23, 34, 28, 2);
+        // Screen inner glow — purple-gold fill
+        g2.fillStyle(0x8a2090, 0.12);
+        g2.fillRoundedRect(x - 17, y - 23, 34, 28, 2);
+        // Screen border
+        g2.lineStyle(1.5, 0xf6c855, 0.75);
+        g2.strokeRoundedRect(x - 18, y - 24, 36, 30, 3);
+
+        // Reel dividers
+        g2.lineStyle(1, 0xf6c855, 0.55);
+        g2.lineBetween(x - 6, y - 23, x - 6, y + 6);
+        g2.lineBetween(x + 6, y - 23, x + 6, y + 6);
+
+        // Reel symbols — Premium high roller symbols
+        const symDepth = depth + 1;
+        this.add.text(x - 12, y - 9, '7️⃣', {
+            fontFamily: FONT, fontSize: '10px', color: '#f6c855', fontStyle: 'bold',
+        }).setOrigin(0.5).setDepth(symDepth);
+        this.add.text(x, y - 9, '💎', {
+            fontFamily: FONT, fontSize: '10px', color: '#80c8ff',
+        }).setOrigin(0.5).setDepth(symDepth);
+        this.add.text(x + 12, y - 9, '⭐', {
+            fontFamily: FONT, fontSize: '10px', color: '#e0e050',
+        }).setOrigin(0.5).setDepth(symDepth);
+
+        // Payline indicator
+        g2.lineStyle(1, 0xf6c855, 0.6);
+        g2.lineBetween(x - 16, y - 9, x + 16, y - 9);
+
+        // Lower panel
+        g2.fillStyle(0x100412, 1);
+        g2.fillRoundedRect(x - 18, y + 8, 36, 16, 2);
+        g2.lineStyle(1, 0xf6c855, 0.35);
+        g2.strokeRoundedRect(x - 18, y + 8, 36, 16, 2);
+
+        // Spin button — gold plated
+        g2.fillStyle(0x000000, 0.45);
+        g2.fillCircle(x + 1, y + 17, 8);
+        g2.fillStyle(0x4a0e4f, 1);
+        g2.fillCircle(x, y + 16, 8);
+        g2.fillStyle(0xf6c855, 1);
+        g2.fillCircle(x, y + 16, 6);
+        g2.fillStyle(0xffffff, 0.35);
+        g2.fillCircle(x - 2, y + 14, 2.5);
+        g2.lineStyle(1, 0xffe885, 0.85);
+        g2.strokeCircle(x, y + 16, 6);
+
+        // Side accent lights — flashing purple neon
+        g2.fillStyle(0x8a2090, 0.7);
+        g2.fillCircle(x - 20, y - 20, 2);
+        g2.fillCircle(x - 20, y - 5, 2);
+        g2.fillCircle(x + 20, y - 20, 2);
+        g2.fillCircle(x + 20, y - 5, 2);
+
+        // Status ticker dots — alternating purple/gold lights
+        for (let ti = 0; ti < 5; ti++) {
+            g2.fillStyle(ti % 2 === 0 ? 0xf6c855 : 0x8a2090, 0.95);
+            g2.fillCircle(x - 12 + ti * 6, y + 30, 2);
+        }
+    }
+
+    private drawATM(x: number, y: number): void {
+        const depth = DEPTH_PROPS + y * 0.1;
+        const g2 = this.add.graphics().setDepth(depth);
+
+        // Shadow
+        g2.fillStyle(0x000000, 0.35);
+        g2.fillEllipse(x, y + 20, 40, 8);
+
+        // ATM Body
+        g2.fillStyle(0x222233, 1);
+        g2.fillRoundedRect(x - 16, y - 30, 32, 50, 4);
+        g2.lineStyle(2, COL_TRIM_DIM, 0.6);
+        g2.strokeRoundedRect(x - 16, y - 30, 32, 50, 4);
+
+        // Screen
+        g2.fillStyle(0x0a1a0a, 1);
+        g2.fillRoundedRect(x - 12, y - 20, 24, 16, 2);
+        g2.fillStyle(0x20d4a0, 0.15);
+        g2.fillRoundedRect(x - 12, y - 20, 24, 16, 2);
+        g2.lineStyle(1, 0x20d4a0, 0.8);
+        g2.strokeRoundedRect(x - 12, y - 20, 24, 16, 2);
+
+        this.add.text(x, y - 12, 'ATM', {
+            fontFamily: FONT, fontSize: '6px', color: '#20d4a0', fontStyle: 'bold'
+        }).setOrigin(0.5).setDepth(depth + 1);
+
+        // Keypad
+        g2.fillStyle(0x111122, 1);
+        g2.fillRoundedRect(x - 10, y + 2, 20, 10, 1);
+    }
+
+    private drawFountain(x: number, y: number): void {
+        const depth = DEPTH_PROPS + y * 0.1 - 5; // Slightly lower depth
+        const g2 = this.add.graphics().setDepth(depth);
+
+        // Shadow
+        g2.fillStyle(0x000000, 0.2);
+        g2.fillEllipse(x, y + 30, 90, 35);
+
+        // Base Pool
+        g2.fillStyle(0x1a2a3a, 1);
+        g2.fillEllipse(x, y, 80, 40);
+        g2.lineStyle(3, 0xc9a84c, 0.8);
+        g2.strokeEllipse(x, y, 80, 40);
+        
+        // Water
+        g2.fillStyle(0x2080d0, 0.6);
+        g2.fillEllipse(x, y, 74, 36);
+
+        // Central Pillar
+        g2.fillStyle(0x2a3a4a, 1);
+        g2.fillRect(x - 10, y - 30, 20, 40);
+        g2.lineStyle(1, 0xc9a84c, 0.5);
+        g2.strokeRect(x - 10, y - 30, 20, 40);
+
+        // Top Bowl
+        g2.fillStyle(0x1a2a3a, 1);
+        g2.fillEllipse(x, y - 30, 36, 12);
+        g2.lineStyle(2, 0xc9a84c, 0.8);
+        g2.strokeEllipse(x, y - 30, 36, 12);
+
+        // Water Spouts
+        g2.lineStyle(2, 0x80c0ff, 0.5);
+        g2.beginPath();
+        g2.moveTo(x, y - 30); g2.lineTo(x - 20, y - 10);
+        g2.moveTo(x, y - 30); g2.lineTo(x + 20, y - 10);
+        g2.strokePath();
+
+        // Animated particles for water drops
+        for (let i = 0; i < 4; i++) {
+            const drop = this.add.circle(x, y - 30, 2, 0x80c0ff, 0.6).setDepth(depth + 1);
+            this.tweens.add({
+                targets: drop,
+                y: y + (Math.random() * 10),
+                x: x + (Math.random() - 0.5) * 40,
+                alpha: 0,
+                duration: 600 + Math.random() * 200,
+                repeat: -1,
+                delay: i * 150
+            });
+        }
+    }
+
+    private drawJukebox(x: number, y: number): void {
+        const depth = DEPTH_PROPS + y * 0.1;
+        const g2 = this.add.graphics().setDepth(depth);
+
+        // Shadow
+        g2.fillStyle(0x000000, 0.35);
+        g2.fillEllipse(x, y + 25, 46, 10);
+
+        // Cabinet Base
+        g2.fillStyle(0x401010, 1);
+        g2.fillRoundedRect(x - 20, y - 35, 40, 60, { tl: 20, tr: 20, bl: 0, br: 0 });
+        g2.lineStyle(2, 0xe8c870, 0.8);
+        g2.strokeRoundedRect(x - 20, y - 35, 40, 60, { tl: 20, tr: 20, bl: 0, br: 0 });
+
+        // Record Window
+        g2.fillStyle(0x050510, 1);
+        g2.fillEllipse(x, y - 15, 24, 24);
+        g2.lineStyle(1.5, 0xff5050, 0.8);
+        g2.strokeEllipse(x, y - 15, 24, 24);
+
+        // Inner Record
+        const record = this.add.graphics().setDepth(depth + 1);
+        record.fillStyle(0x111111, 1);
+        record.fillCircle(x, y - 15, 10);
+        record.fillStyle(0xffd040, 1);
+        record.fillCircle(x, y - 15, 3);
+        
+        // Spin record
+        this.tweens.add({
+            targets: record,
+            angle: 360,
+            duration: 2000,
+            repeat: -1
+        });
+
+        // Neon Tubes
+        const tube = this.add.graphics().setDepth(depth + 2);
+        tube.lineStyle(3, COL_NEON_PINK, 0.8);
+        tube.beginPath();
+        tube.arc(x, y - 15, 20, Math.PI, 0, false);
+        tube.strokePath();
+
+        this.tweens.add({
+            targets: tube,
+            alpha: { from: 0.6, to: 1.0 },
+            yoyo: true,
+            duration: 500,
+            repeat: -1
+        });
     }
 
     private drawBlackjackTable(cx: number, cy: number): void {
@@ -1146,6 +1498,25 @@ export class CasinoLobbyScene extends Phaser.Scene {
         shaftGfx.fillTriangle(WORLD_W / 2 - 46, 104, WORLD_W / 2 + 46, 104, WORLD_W / 2, 258);
         shaftGfx.fillTriangle(154, 216, 246, 216, 200, 320);
         shaftGfx.fillTriangle(714, 216, 806, 216, 760, 320);
+
+        // Breathe the ambient glow and light shafts
+        this.tweens.add({
+            targets: ambientGfx,
+            alpha: { from: 0.8, to: 1.0 },
+            duration: 2500,
+            ease: 'Sine.easeInOut',
+            yoyo: true,
+            repeat: -1
+        });
+
+        this.tweens.add({
+            targets: shaftGfx,
+            alpha: { from: 0.6, to: 1.0 },
+            duration: 3200,
+            ease: 'Sine.easeInOut',
+            yoyo: true,
+            repeat: -1
+        });
     }
 
     private buildAnimatedAtmosphere(): void {
@@ -1384,6 +1755,170 @@ export class CasinoLobbyScene extends Phaser.Scene {
         }
     }
 
+    private spawnStationaryNPCs(): void {
+        // Lola (Showgirl left of entrance approach)
+        const lolaQuotes = ["Buy a Lucky Scratcher and match 3 to win up to 5,000◈!"];
+        const lola = new StationaryNPC(
+            this, 400, 520, "Lola 💃", "avatar_showgirl", 0xff40a0, lolaQuotes
+        );
+        this.interaction.register({
+            id: 'lola_scratchers', x: 400, y: 520, radius: 60,
+            label: 'Buy Scratch Card (50◈)',
+            onInteract: () => {
+                lola.interact("Let's see if you're lucky today!");
+                this.openScratchers();
+            },
+        });
+        
+        // Gigi (Showgirl right of entrance approach)
+        const gigiQuotes = ["Feeling lucky? Scratch and win today!"];
+        const gigi = new StationaryNPC(
+            this, 560, 520, "Gigi 💃", "avatar_showgirl", 0xff40a0, gigiQuotes
+        );
+        this.interaction.register({
+            id: 'gigi_scratchers', x: 560, y: 520, radius: 60,
+            label: 'Buy Scratch Card (50◈)',
+            onInteract: () => {
+                gigi.interact("Good luck, darling!");
+                this.openScratchers();
+            },
+        });
+
+        // Rusty (Seated bar patron left)
+        const rustyQuotes = [
+            "Phew, slots took a bite out of me. Just here to drink my troubles away. 🍺",
+            "The bartender makes the best Lucky Lemonade. You gotta try it!",
+            "I bet 100◈ on the #3 horse and it tripped. Don't take my horse racing tips!",
+            "Tipping the bartender 10◈ always gets you a friendly smile. Worth it."
+        ];
+        const rusty = new StationaryNPC(
+            this, 320, 140, "Rusty 🥃", "avatar_ai_male", 0xcc5544, rustyQuotes
+        );
+
+        // Ginger (Seated bar patron right)
+        const gingerQuotes = [
+            "Just hit a nice win in Plinko! High Risk is the only way to play. 🎯",
+            "I'm waiting for my slot machine to heat up. It's due, I tell you!",
+            "Shh, I'm trying to study basic strategy for Blackjack. Split pairs, right?",
+            "This bar is the only place in town with a free Lucky Shot bonus. Cheers!"
+        ];
+        const ginger = new StationaryNPC(
+            this, 620, 140, "Ginger 🍹", "avatar_ai_female", 0xcc4488, gingerQuotes
+        );
+
+        // Buster (Bouncer guarding VIP Lounge entrance)
+        const busterQuotes = [
+            "Welcome back, boss. Go right on in! 🕶️",
+            "Keep the noise down in the lounge, we have serious high rollers inside.",
+            "Only the elite can enter here. You've earned it."
+        ];
+        const buster = new StationaryNPC(
+            this, 270, 620, "Buster 🕶️", "avatar_ai_male", 0xc9a84c, busterQuotes
+        );
+
+        // Duke (VIP inside the lounge)
+        const dukeQuotes = [
+            "Only the finest champagne for us high rollers! 🥂",
+            "I just wagered 5,000◈ at the poker table. Easy come, easy go.",
+            "The slots in here are tuned for serious action. Care to spin?",
+            "Ah, welcome! You must be the new face in town. Quite a chip stack you have!"
+        ];
+        const duke = new StationaryNPC(
+            this, 180, 640, "Duke 👑", "avatar_ai_vip", 0xd4af37, dukeQuotes
+        );
+
+        this.npcs.push(lola, gigi, rusty, ginger, buster, duke);
+
+        // Register hotspots for each NPC (except Buster, who has custom gate-check logic)
+        this.npcs.forEach(npc => {
+            if (npc.name.includes("Buster")) return;
+            this.interaction.register({
+                id: `npc_${npc.name}`,
+                x: npc.x,
+                y: npc.y,
+                radius: 48,
+                label: `Talk to ${npc.name}`,
+                onInteract: () => npc.interact()
+            });
+        });
+
+        // Custom hotspot for Buster the Bouncer
+        this.interaction.register({
+            id: 'npc_Buster',
+            x: 270,
+            y: 620,
+            radius: 48,
+            label: 'Talk to Buster 🕶️',
+            onInteract: () => {
+                if (this.vipUnlocked) {
+                    buster.interact("Welcome back, boss. Go right on in! 🕶️");
+                } else {
+                    const chips = GameState.get().chips;
+                    if (chips >= 15000) {
+                        this.vipUnlocked = true;
+                        
+                        // Speak welcome
+                        buster.interact("Impressive! Welcome to the High Rollers Club. Go right on in! 🕶️");
+                        
+                        // Tween Buster out of the way
+                        this.tweens.add({
+                            targets: buster,
+                            x: 305,
+                            duration: 800,
+                            ease: 'Cubic.easeOut',
+                            onUpdate: () => {
+                                buster.setPosition(buster.x, buster.y);
+                            },
+                            onComplete: () => {
+                                // Re-register hotspot at the new position so the interaction matches his visual position!
+                                this.interaction.unregister('npc_Buster');
+                                this.interaction.register({
+                                    id: 'npc_Buster',
+                                    x: 305,
+                                    y: 620,
+                                    radius: 48,
+                                    label: 'Talk to Buster 🕶️',
+                                    onInteract: () => {
+                                        buster.interact("Welcome back, boss. Go right on in! 🕶️");
+                                    }
+                                });
+                            }
+                        });
+                        
+                        // Refresh blockers
+                        const newBlockers = this.getSharedBlockers();
+                        this.avatar.setBlockers(newBlockers);
+                        this.aiWalkers.forEach(ai => ai.setBlockers(newBlockers));
+                        
+                        ToastManager.show(this, "🔓 VIP Lounge Unlocked!", "jackpot");
+                    } else {
+                        buster.interact("Halt. The VIP High Rollers Lounge is for guests with 15,000◈ or more. Show me the chips!");
+                    }
+                }
+            }
+        });
+
+        // Custom hotspot for the VIP Gold Slot Machine inside the lounge
+        this.interaction.register({
+            id: 'vip_slots',
+            x: 80,
+            y: 640,
+            radius: 48,
+            label: '🏆 High-Stakes Slots (10x Bets)',
+            onInteract: () => {
+                this.activePanel = 'slots';
+                GameState.setInteraction('slots');
+                this.hud.setPanelOpen(true);
+                new SlotsPanel(this, () => {
+                    this.activePanel = 'none';
+                    GameState.clearInteraction();
+                    this.hud.setPanelOpen(false);
+                    ToastManager.clear();
+                }, true); // pass true for High Stakes
+            }
+        });
+    }
+
     /** Returns the shared list of blocker rects used by all walkers (player + AI). */
     private getSharedBlockers(): Array<{ x: number; y: number; w: number; h: number }> {
         const bjCx = ZONE_BLACKJACK.x + ZONE_BLACKJACK.w / 2;
@@ -1391,7 +1926,7 @@ export class CasinoLobbyScene extends Phaser.Scene {
         const rtCx = ZONE_ROULETTE.x  + ZONE_ROULETTE.w  / 2;
         const rtCy = ZONE_ROULETTE.y  + ZONE_ROULETTE.h  / 2;
 
-        return [
+        const list = [
             // Perimeter walls
             { x: 0,            y: 0,            w: WORLD_W, h: 32   },
             { x: 0,            y: 0,            w: 24,      h: WORLD_H },
@@ -1402,6 +1937,8 @@ export class CasinoLobbyScene extends Phaser.Scene {
             { x: 120 - 22, y: 100 - 38, w: 44, h: 70 },
             { x: 60  - 22, y: 200 - 38, w: 44, h: 70 },
             { x: 120 - 22, y: 200 - 38, w: 44, h: 70 },
+            // VIP Slot machine cabinet inside the lounge
+            { x: 80 - 22,  y: 640 - 38, w: 44, h: 70 },
             // Poker table
             { x: 790 - 110, y: 190 - 60, w: 220, h: 120 },
             // Blackjack table
@@ -1422,7 +1959,18 @@ export class CasinoLobbyScene extends Phaser.Scene {
                 y: ZONE_BINGO.y + ZONE_BINGO.h / 2 - 35,
                 w: 130, h: 70,
             },
+            // Props
+            { x: 384, y: WORLD_H - 130, w: 32, h: 50 }, // ATM
+            { x: WORLD_W / 2 - 40, y: WORLD_H / 2 - 10, w: 80, h: 40 }, // Fountain
+            { x: ZONE_BAR.x + 20, y: ZONE_BAR.y + ZONE_BAR.h - 70, w: 40, h: 60 }, // Jukebox
         ];
+
+        if (!this.vipUnlocked) {
+            // Physical gate blocker at doorway (between stanchions/velvet rope and wall)
+            list.push({ x: 250, y: 580, w: 35, h: 60 });
+        }
+
+        return list;
     }
 
     // ── Zone Detection ────────────────────────────────────────────────────────
@@ -1440,6 +1988,7 @@ export class CasinoLobbyScene extends Phaser.Scene {
         else if (this.inZone(x, y, ZONE_BINGO))      zone = 'bingo';
         else if (this.inZone(x, y, ZONE_HORSES))     zone = 'horses';
         else if (this.inZone(x, y, ZONE_ENTRANCE))   zone = 'entrance';
+        else if (this.inZone(x, y, ZONE_VIP))        zone = 'vip';
 
         if (GameState.get().zone !== zone) {
             GameState.setZone(zone);
@@ -1466,6 +2015,7 @@ export class CasinoLobbyScene extends Phaser.Scene {
             bingo:     COL_BINGO_ACCENT,
             horses:    COL_HORSES_ACCENT,
             entrance:  COL_TRIM,
+            vip:       0xf6c855,
             floor:     0x112233,
         };
         const col = ZONE_FLASH_COLORS[zone] ?? 0x112233;
@@ -1551,6 +2101,28 @@ export class CasinoLobbyScene extends Phaser.Scene {
             label: 'Bet on Horses',
             onInteract: () => this.openHorseRace(),
         });
+        
+        // --- New Props Hotspots ---
+        this.interaction.register({
+            id: 'atm',
+            x: 400, y: WORLD_H - 100, radius: 60,
+            label: 'Use ATM (Daily Bonus)',
+            onInteract: () => this.useATM(),
+        });
+
+        this.interaction.register({
+            id: 'fountain',
+            x: WORLD_W / 2, y: WORLD_H / 2 + 30, radius: 90,
+            label: 'Toss Chip into Fountain (50◈)',
+            onInteract: () => this.useFountain(),
+        });
+
+        this.interaction.register({
+            id: 'jukebox',
+            x: ZONE_BAR.x + 40, y: ZONE_BAR.y + ZONE_BAR.h - 40, radius: 60,
+            label: 'Change Music',
+            onInteract: () => this.useJukebox(),
+        });
     }
 
     // ── Panel Openers ─────────────────────────────────────────────────────────
@@ -1559,6 +2131,7 @@ export class CasinoLobbyScene extends Phaser.Scene {
         if (this.activePanel !== 'none') return;
         this.activePanel = 'slots';
         GameState.setInteraction('slots');
+        this.hud.setPanelOpen(true);
         new SlotsPanel(this, () => this.closePanel());
     }
 
@@ -1566,6 +2139,7 @@ export class CasinoLobbyScene extends Phaser.Scene {
         if (this.activePanel !== 'none') return;
         this.activePanel = 'bar';
         GameState.setInteraction('bar');
+        this.hud.setPanelOpen(true);
         new BarPanel(this, () => this.closePanel());
     }
 
@@ -1573,6 +2147,7 @@ export class CasinoLobbyScene extends Phaser.Scene {
         if (this.activePanel !== 'none') return;
         this.activePanel = 'poker';
         GameState.setInteraction('poker');
+        this.hud.setPanelOpen(true);
         new PokerPanel(this, () => this.closePanel());
     }
 
@@ -1580,6 +2155,7 @@ export class CasinoLobbyScene extends Phaser.Scene {
         if (this.activePanel !== 'none') return;
         this.activePanel = 'blackjack';
         GameState.setInteraction('blackjack');
+        this.hud.setPanelOpen(true);
         new BlackjackPanel(this, () => this.closePanel());
     }
 
@@ -1587,6 +2163,7 @@ export class CasinoLobbyScene extends Phaser.Scene {
         if (this.activePanel !== 'none') return;
         this.activePanel = 'roulette';
         GameState.setInteraction('roulette');
+        this.hud.setPanelOpen(true);
         new RoulettePanel(this, () => this.closePanel());
     }
 
@@ -1594,6 +2171,7 @@ export class CasinoLobbyScene extends Phaser.Scene {
         if (this.activePanel !== 'none') return;
         this.activePanel = 'plinko';
         GameState.setInteraction('plinko');
+        this.hud.setPanelOpen(true);
         new PlinkoPanel(this, () => this.closePanel());
     }
 
@@ -1601,6 +2179,7 @@ export class CasinoLobbyScene extends Phaser.Scene {
         if (this.activePanel !== 'none') return;
         this.activePanel = 'bingo';
         GameState.setInteraction('bingo');
+        this.hud.setPanelOpen(true);
         new BingoPanel(this, () => this.closePanel());
     }
 
@@ -1608,13 +2187,116 @@ export class CasinoLobbyScene extends Phaser.Scene {
         if (this.activePanel !== 'none') return;
         this.activePanel = 'horses';
         GameState.setInteraction('horses');
+        this.hud.setPanelOpen(true);
         new HorseRacePanel(this, () => this.closePanel());
+    }
+
+    private openScratchers(): void {
+        if (this.activePanel !== 'none') return;
+        this.activePanel = 'scratchers';
+        GameState.setInteraction('slots');
+        this.hud.setPanelOpen(true);
+        new ScratcherPanel(this, () => this.closePanel());
+    }
+
+    private openStatsMenu(): void {
+        if (this.activePanel !== 'none') return;
+        this.activePanel = 'menu';
+        this.hud.setPanelOpen(true);
+        new StatsPanel(this, () => {
+            this.activePanel = 'none';
+            this.hud.setPanelOpen(false);
+            this.updateHintForZone(GameState.get().zone);
+            ToastManager.clear();
+        });
     }
 
     private closePanel(): void {
         this.activePanel = 'none';
         GameState.clearInteraction();
+        this.hud.setPanelOpen(false);
         this.updateHintForZone(GameState.get().zone);
+        ToastManager.clear();
+    }
+
+    // ── Prop Interactions ─────────────────────────────────────────────────────
+
+    private useATM(): void {
+        const state = GameState.get();
+        const now = Date.now();
+        const ONE_DAY = 24 * 60 * 60 * 1000;
+        
+        let dispensed = 0;
+        let msg = '';
+        
+        if (state.chips === 0) {
+            dispensed = 1000;
+            msg = 'Bailout! +1,000◈ dispensed.';
+        } else if (now - state.lastDailyClaim > ONE_DAY) {
+            dispensed = 500;
+            msg = 'Daily Bonus! +500◈ dispensed.';
+            GameState.update({ lastDailyClaim: now });
+        } else {
+            const hrs = Math.ceil((ONE_DAY - (now - state.lastDailyClaim)) / (60 * 60 * 1000));
+            ToastManager.show(this, `ATM: Come back in ${hrs} hours.`, 'info');
+            SoundManager.playFold();
+            return;
+        }
+
+        GameState.addChips(dispensed);
+        SoundManager.playWin(dispensed);
+        ToastManager.show(this, msg, 'win');
+    }
+
+    private useFountain(): void {
+        const state = GameState.get();
+        if (state.chips < 50) {
+            ToastManager.show(this, "Not enough chips to toss (50◈ needed)", 'info');
+            return;
+        }
+        
+        GameState.addChips(-50);
+        SoundManager.playClick();
+        
+        // Create an upward throwing arc particle
+        const x = WORLD_W / 2;
+        const y = WORLD_H / 2 + 30;
+        const chip = this.add.circle(this.avatar.x, this.avatar.y - 20, 4, 0xc9a84c).setDepth(DEPTH_PROPS + 10);
+        this.tweens.add({
+            targets: chip,
+            x: x,
+            y: y - 20,
+            duration: 600,
+            ease: 'Quad.easeOut',
+            onComplete: () => {
+                chip.destroy();
+                SoundManager.playChipLand();
+                
+                // Random outcome
+                const rand = Math.random();
+                if (rand < 0.2) {
+                    GameState.addBuff('slotsLuck', 10);
+                    ToastManager.show(this, "The water glows! (+10 Slots Luck)", 'jackpot');
+                    SoundManager.playJackpot();
+                } else if (rand < 0.4) {
+                    GameState.addBuff('pokerTell', 5);
+                    ToastManager.show(this, "The water shimmers! (+5 Poker Tells)", 'win');
+                    SoundManager.playWin(100);
+                } else {
+                    ToastManager.show(this, "Plop. Nothing happens.", 'info');
+                }
+            }
+        });
+    }
+
+    private useJukebox(): void {
+        const tracks = ['Jazz', 'Synthwave', 'Casino Ambient'];
+        const currentTrack = (this as any)._jukeboxTrack || 0;
+        const nextTrack = (currentTrack + 1) % tracks.length;
+        (this as any)._jukeboxTrack = nextTrack;
+        
+        ToastManager.show(this, `🎵 Playing: ${tracks[nextTrack]}`, 'info');
+        SoundManager.playClick();
     }
 
     // ── Context-sensitive hint bar ────────────────────────────────────────────
@@ -1633,8 +2315,8 @@ export class CasinoLobbyScene extends Phaser.Scene {
 
     private updateHintForZone(zone: Zone): void {
         const HINTS: Record<Zone, string> = {
-            floor:     'WASD / ↑↓←→ move  ·  approach a zone and press  E  to interact  ·  ESC close',
-            entrance:  'WASD / ↑↓←→ move  ·  walk north to explore the casino',
+            floor:     'WASD / ↑↓←→ move  ·  Hold  Q  for Emotes  ·  approach a zone and press  E  to interact  ·  ESC close',
+            entrance:  'WASD / ↑↓←→ move  ·  Hold  Q  for Emotes  ·  walk north to explore the casino',
             slots:     'Walk up and press  E  to play  ·  SPACE spin  ·  ESC close',
             poker:     'Walk up and press  E  to join  ·  F=Fold  C=Call  R=Raise  ·  ESC close',
             bar:       'Walk up and press  E  to order  ·  ESC close',
@@ -1643,6 +2325,7 @@ export class CasinoLobbyScene extends Phaser.Scene {
             plinko:    'Walk up and press  E  to play  ·  SPACE drop  ·  ESC close',
             bingo:     'Walk up and press  E  to play  ·  ESC close',
             horses:    'Walk up and press  E  to bet  ·  Pick horse, set bet, press RACE  ·  ESC close',
+            vip:       '★ VIP HIGH ROLLERS LOUNGE  ·  Requires 15,000◈ to enter  ·  High-Stakes Slots: 10× bets',
         };
 
         if (this.hintText) {

@@ -103,6 +103,16 @@ export const ToastManager = {
             _dismiss(scene, toast);
         });
     },
+
+    /** Clear all active toasts immediately. */
+    clear(): void {
+        activeToasts.forEach(t => {
+            if (t.container && t.container.active) {
+                t.container.destroy();
+            }
+        });
+        activeToasts.length = 0;
+    },
 };
 
 function _dismiss(scene: Phaser.Scene, toast: Toast): void {
